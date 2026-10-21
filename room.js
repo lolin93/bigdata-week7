@@ -4,6 +4,7 @@ import {companyPosition} from './engine.js';
 export const ROOM_PREFIX='econboard-v1-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH=5;
+const MAX_PLAYERS=8,NAME_LENGTH=16;
 const GUEST_ACTIONS=['roll','draw-card','end-turn','hire','layoff','loan','repay','mark-bad','recover-bad'];
 const AMOUNT_ACTIONS=['hire','layoff','loan','repay','mark-bad','recover-bad'];
 
@@ -38,6 +39,31 @@ export function releaseSeat(seats,playerId){
   const next={...seats};delete next[playerId];return next;
 }
 
+// Before a game starts the room is a lobby: each device types a name and picks its own company,
+// a company belongs to one device only, and the host can start as soon as two devices have picked.
+export function cleanPlayerName(raw){return String(raw??'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,NAME_LENGTH)}
+export function pickRole(lobby,clientId,roleId,name,roleIds){
+  if(!roleIds.includes(roleId))throw Error('沒有這家企業。');
+  if(lobby.some(e=>e.roleId===roleId&&e.clientId!==clientId))throw Error('這家企業已經有人選了。');
+  const entry={clientId,name:cleanPlayerName(name),roleId},i=lobby.findIndex(e=>e.clientId===clientId);
+  if(i<0&&lobby.length>=MAX_PLAYERS)throw Error(`最多 ${MAX_PLAYERS} 位玩家。`);
+  return i<0?[...lobby,entry]:lobby.map((e,j)=>j===i?entry:e);
+}
+export function leaveLobby(lobby,clientId){return lobby.filter(e=>e.clientId!==clientId)}
+// Players for createGame in pick order; blank names get a default and repeated names a number, since the engine needs unique names.
+export function lobbyPlayers(lobby){
+  if(lobby.length<2)throw Error('至少要 2 位玩家選好企業才能開始。');
+  const used=new Set();
+  return lobby.map((e,i)=>{
+    const base=e.name||`玩家 ${i+1}`;let name=base,n=2;
+    while(used.has(name))name=`${base} ${n++}`;
+    used.add(name);
+    return {name,roleId:e.roleId};
+  });
+}
+// After createGame, each device is seated at the player made from its pick, so nobody has to choose a seat again.
+export function lobbySeats(game,lobby){return Object.fromEntries(game.players.map((p,i)=>[p.id,lobby[i].clientId]))}
+
 // Net worth is computed in one place so a later rule (for example a player owning several companies) only changes this.
 export function netWorthRanking(game){
   const rows=game.players.map(player=>({player,netWorth:companyPosition(game,player.roleId).netWorth}));
@@ -50,6 +76,8 @@ export function parseGuestMessage(raw){
   if(!raw||typeof raw!=='object')return null;
   if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
   if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
+  if(raw.t==='pick'){const roleId=safeId(raw.roleId);return roleId&&(raw.name===undefined||typeof raw.name==='string')?{t:'pick',roleId,name:cleanPlayerName(raw.name)}:null}
+  if(raw.t==='unpick')return {t:'unpick'};
   if(raw.t==='action'&&GUEST_ACTIONS.includes(raw.action)){
     if(!AMOUNT_ACTIONS.includes(raw.action))return {t:'action',action:raw.action};
     const amount=Number(raw.amount);

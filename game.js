@@ -354,6 +354,7 @@ function isNewerGame(incoming,current){
 const ROOM_PREFIX='econboard-v1-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH=5;
+const MAX_PLAYERS=8,NAME_LENGTH=16;
 const GUEST_ACTIONS=['roll','draw-card','end-turn','hire','layoff','loan','repay','mark-bad','recover-bad'];
 const AMOUNT_ACTIONS=['hire','layoff','loan','repay','mark-bad','recover-bad'];
 
@@ -388,6 +389,31 @@ function releaseSeat(seats,playerId){
   const next={...seats};delete next[playerId];return next;
 }
 
+// Before a game starts the room is a lobby: each device types a name and picks its own company,
+// a company belongs to one device only, and the host can start as soon as two devices have picked.
+function cleanPlayerName(raw){return String(raw??'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,NAME_LENGTH)}
+function pickRole(lobby,clientId,roleId,name,roleIds){
+  if(!roleIds.includes(roleId))throw Error('沒有這家企業。');
+  if(lobby.some(e=>e.roleId===roleId&&e.clientId!==clientId))throw Error('這家企業已經有人選了。');
+  const entry={clientId,name:cleanPlayerName(name),roleId},i=lobby.findIndex(e=>e.clientId===clientId);
+  if(i<0&&lobby.length>=MAX_PLAYERS)throw Error(`最多 ${MAX_PLAYERS} 位玩家。`);
+  return i<0?[...lobby,entry]:lobby.map((e,j)=>j===i?entry:e);
+}
+function leaveLobby(lobby,clientId){return lobby.filter(e=>e.clientId!==clientId)}
+// Players for createGame in pick order; blank names get a default and repeated names a number, since the engine needs unique names.
+function lobbyPlayers(lobby){
+  if(lobby.length<2)throw Error('至少要 2 位玩家選好企業才能開始。');
+  const used=new Set();
+  return lobby.map((e,i)=>{
+    const base=e.name||`玩家 ${i+1}`;let name=base,n=2;
+    while(used.has(name))name=`${base} ${n++}`;
+    used.add(name);
+    return {name,roleId:e.roleId};
+  });
+}
+// After createGame, each device is seated at the player made from its pick, so nobody has to choose a seat again.
+function lobbySeats(game,lobby){return Object.fromEntries(game.players.map((p,i)=>[p.id,lobby[i].clientId]))}
+
 // Net worth is computed in one place so a later rule (for example a player owning several companies) only changes this.
 function netWorthRanking(game){
   const rows=game.players.map(player=>({player,netWorth:companyPosition(game,player.roleId).netWorth}));
@@ -400,6 +426,8 @@ function parseGuestMessage(raw){
   if(!raw||typeof raw!=='object')return null;
   if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
   if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
+  if(raw.t==='pick'){const roleId=safeId(raw.roleId);return roleId&&(raw.name===undefined||typeof raw.name==='string')?{t:'pick',roleId,name:cleanPlayerName(raw.name)}:null}
+  if(raw.t==='unpick')return {t:'unpick'};
   if(raw.t==='action'&&GUEST_ACTIONS.includes(raw.action)){
     if(!AMOUNT_ACTIONS.includes(raw.action))return {t:'action',action:raw.action};
     const amount=Number(raw.amount);
@@ -458,7 +486,7 @@ const viewKey='economy-board-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
 const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
 // Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
-const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
+const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,lobby:[],nameDraft:'',lobbyTarget:'5500',lobbyRounds:'12',synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
 let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
@@ -540,16 +568,12 @@ function renderSetup(){
   $('#add-player').disabled=setupPlayers.length>=8;
   renderSetupRoomHint();
 }
-// While a host waits in a room, the setup screen shows how many devices are in so the player count can match them.
+// A host in a room starts the game from the room lobby, where every device picks its own company.
 function renderSetupRoomHint(){
   const el=$('#setup-room-hint');
   el.hidden=!isHost();
-  if(!isHost())return;
-  const devices=onlineClients().length,target=Math.min(8,Math.max(2,devices));
-  const action=devices<2?'等其他人用邀請連結加入。':setupPlayers.length===target?(devices>8?'玩家最多 8 位，多出來的裝置只能觀看。':'目前人數剛好。'):`<button type="button" class="secondary" data-match-devices="${target}">改成 ${target} 位玩家</button>`;
-  el.innerHTML=`房間裡目前有 <strong>${devices}</strong> 台裝置（含你）。每位玩家都要有一台裝置坐下才能開始，玩家數要和裝置數一樣。${action}`;
+  if(isHost())el.innerHTML=`你開了房間，玩家由加入的人在「多裝置房間」視窗自己選企業，目前 <strong>${room.lobby.length}</strong> 位選好。<button type="button" class="secondary" data-open-room>打開房間視窗</button>`;
 }
-function addSetupPlayer(){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id})}
 function currentPlayer(){return state?.players[state.turnIndex]}
 function boardCoords(i){if(i<=6)return [1,i+1];if(i<=12)return [i-5,7];if(i<=18)return [7,19-i];return [25-i,1]}
 function sectorForTile(i){const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];return sectors[((Math.floor((i-3)/3)%6)+6)%6]}
@@ -887,7 +911,7 @@ function onlineClients(){return isHost()?[clientId,...[...room.guests].filter(g=
 function sendSafe(conn,message){try{if(conn?.open)conn.send(message)}catch{}}
 function roomSnapshot(welcome=false){
   syncSeats();
-  return {t:'state',welcome,game:state?JSON.stringify({...state,log:state.log.slice(0,60)}):null,seats:room.seats,online:onlineClients(),hostClientId:clientId};
+  return {t:'state',welcome,game:state?JSON.stringify({...state,log:state.log.slice(0,60)}):null,seats:room.seats,lobby:room.lobby,online:onlineClients(),hostClientId:clientId};
 }
 function broadcastRoom(){
   if(!isHost())return;
@@ -898,7 +922,7 @@ function broadcastRoom(){
 function resetRoom(extra={}){
   const peer=room.peer;
   clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);clearTimeout(room.signalTimer);
-  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,synced:false},extra);
+  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,lobby:[],synced:false},extra);
   setTimeout(()=>{try{peer?.destroy()}catch{}},300);
 }
 
@@ -965,6 +989,12 @@ function onGuestMessage(guest,raw){
   }
   if(!guest.clientId)return;
   const reject=message=>sendSafe(guest.conn,{t:'reject',message});
+  if(msg.t==='pick'){
+    if(state){reject('遊戲已經開始，不能再選企業。');return}
+    try{room.lobby=pickRole(room.lobby,guest.clientId,msg.roleId,msg.name,ROLES.map(r=>r.id))}catch(e){reject(e.message);return}
+    broadcastRoom();render();return;
+  }
+  if(msg.t==='unpick'){if(!state){room.lobby=leaveLobby(room.lobby,guest.clientId);broadcastRoom();render()}return}
   if(msg.t==='claim'){
     if(!state){reject('房主還沒開始對局。');return}
     syncSeats();
@@ -1039,13 +1069,17 @@ function onHostMessage(msg){
   room.seats=msg.seats&&typeof msg.seats==='object'?Object.fromEntries(Object.entries(msg.seats).filter(([,v])=>typeof v==='string')):{};
   room.online=Array.isArray(msg.online)?msg.online.filter(x=>typeof x==='string'):[];
   room.hostClientId=typeof msg.hostClientId==='string'?msg.hostClientId:'';
+  room.lobby=Array.isArray(msg.lobby)?msg.lobby.filter(e=>typeof e?.clientId==='string'&&typeof e.roleId==='string').map(e=>({clientId:e.clientId,roleId:e.roleId,name:String(e.name??'').slice(0,16)})):[];
   if(msg.welcome){room.synced=true;page='game'}
   if(typeof msg.game!=='string'){cancelAnimation();closeCard();state=null;render();return}
   let incoming;try{incoming=importGame(msg.game)}catch{return}
   const before=state&&!msg.welcome?{round:state.round,status:state.status}:null;
   if(msg.welcome){cancelAnimation();state=null}
+  const hadGame=!!state;
   if(!adoptShared(incoming)){render();return}
   $('#save-status').textContent=`房間 ${room.code} 同步中`;
+  // When the host starts, everyone goes to the board; only a device that could still take an empty seat keeps the seat list open.
+  if(!hadGame&&!msg.welcome&&(mySeat()||!missingSeats().length))closeRoomModal();
   if(before?.status==='playing'&&incoming.status!=='playing')notify('對局結束，請查看勝負結果。');
   else if(before&&incoming.round>before.round){snapshotSelection='latest';rememberView();notify(`第 ${before.round} 季已結算。`)}
 }
@@ -1059,6 +1093,27 @@ function claimSeatHere(playerId){
   try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),playerId,clientId)}catch(e){notify(e.message);return}
   broadcastRoom();render();
 }
+function pickHere(roleId){
+  const name=$('#lobby-name')?.value??room.nameDraft;room.nameDraft=name;
+  if(isGuest()){sendToHost({t:'pick',roleId,name});return}
+  if(!isHost()||state)return;
+  try{room.lobby=pickRole(room.lobby,clientId,roleId,name,ROLES.map(r=>r.id))}catch(e){notify(e.message);return}
+  broadcastRoom();render();
+}
+function dropFromLobby(id){if(!isHost()||state)return;room.lobby=leaveLobby(room.lobby,id);broadcastRoom();render()}
+async function startRoomGame(){
+  if(!isHost()||state)return;
+  let players;try{players=lobbyPlayers(room.lobby)}catch(e){notify(e.message);return}
+  const online=onlineClients(),away=room.lobby.filter(e=>!online.includes(e.clientId));
+  if(!room.lobby.some(e=>e.clientId===clientId)&&!confirm('你還沒選企業，開始後你只能觀看。確定要開始嗎？'))return;
+  if(away.length&&!confirm(`${away.map(e=>`「${e.name||role(e.roleId).name}」`).join('、')}目前離線，輪到他時遊戲會停下來等。確定要開始嗎？`))return;
+  try{await withGameLock(()=>{
+    const next=createGame({players,targetWealth:room.lobbyTarget,maxRounds:room.lobbyRounds});
+    prepareNewSession(next);
+    room.seats=lobbySeats(next,room.lobby);room.seatsGameId=syncInfo(next).gameId;
+    state=next;page='game';tab='business';snapshotSelection='preview';rememberView();closeRoomModal();save();render();
+  })}catch(e){notify(e.message)}
+}
 function kickSeat(playerId){if(!isHost())return;room.seats=releaseSeat(room.seats,playerId);broadcastRoom();render()}
 function leaveRoom(){
   if(isHost()){if(!confirm('關閉房間後，其他裝置會停止同步。要關閉嗎？'))return;closeRoom();notify('房間已關閉。');return}
@@ -1070,9 +1125,6 @@ function leaveRoom(){
 function roomLink(){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',room.code);return url.href}
 async function copyText(text,done){try{await navigator.clipboard.writeText(text);notify(done)}catch{notify(`無法自動複製，請手動記下：${text}`)}}
 function seatListMarkup(){
-  if(!state)return isHost()
-    ?`<ol class="room-steps"><li>按上面的「複製邀請連結」傳給大家。</li><li>等人到齊：目前 <strong>${onlineClients().length}</strong> 台裝置（含你）。</li><li>關掉這個視窗，按「設定玩家，開始遊戲 →」，玩家數設成和裝置數一樣再開始。</li><li>開始後每個人（包括你）都會跳出座位清單，各選一位。</li></ol>`
-    :'<ol class="room-steps"><li>等房主設定玩家、開始遊戲。</li><li>開始後會跳出座位清單：找到自己的名字按「坐這裡」並確認，確認後不能自己換。</li><li>輪到你的玩家時才能操作。</li></ol>';
   const host=roomHostId(),online=onlineClients(),seated=!!mySeat();
   return `<ul class="room-seats">${state.players.map(p=>{
     const owner=room.seats[p.id],mine=owner===clientId;
@@ -1081,6 +1133,20 @@ function seatListMarkup(){
     const button=owner&&isHost()?`<button type="button" class="quiet" data-room="kick" data-player="${h(p.id)}">收回</button>`:mine?'<span class="room-seat-locked">已鎖定</span>':!owner&&!seated?`<button type="button" class="secondary" data-room="claim" data-player="${h(p.id)}">坐這裡</button>`:'';
     return `<li class="room-seat ${mine?'mine':''}"><span class="room-seat-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}</strong><small>${h(role(p.roleId).name)} · ${who}</small></div>${button}</li>`;
   }).join('')}</ul>`;
+}
+// Lobby before the game: everyone types a name and picks a company; the host starts once at least two have picked.
+function lobbyMarkup(){
+  const mine=room.lobby.find(e=>e.clientId===clientId),taken=new Map(room.lobby.map(e=>[e.roleId,e])),online=onlineClients(),host=roomHostId();
+  const roles=ROLES.map(r=>{
+    const owner=taken.get(r.id),me=owner?.clientId===clientId;
+    return `<button type="button" class="lobby-role ${me?'mine':''}" data-room="pick" data-role="${h(r.id)}" ${owner&&!me?'disabled':''}><span aria-hidden="true">${r.icon}</span><strong>${h(r.name)}</strong><small>${owner?(me?'你選的':h(owner.name||'已被選走')):h(r.sector)}</small></button>`;
+  }).join('');
+  const who=e=>e.clientId===clientId?' · 你':e.clientId===host?' · 房主':online.includes(e.clientId)?'':' · 離線';
+  const list=room.lobby.length?`<ol class="lobby-list">${room.lobby.map(e=>`<li><strong>${h(e.name||'（還沒填名字）')}</strong><small>${h(role(e.roleId).name)}${who(e)}</small>${isHost()&&e.clientId!==clientId?`<button type="button" class="quiet" data-room="drop" data-client="${h(e.clientId)}">移除</button>`:''}</li>`).join('')}</ol>`:'<p class="room-note">還沒有人選企業。</p>';
+  const end=isHost()
+    ?`<div class="lobby-options"><label>勝利淨資產<input id="lobby-target" type="number" min="2000" step="500" value="${h(room.lobbyTarget)}"></label><label>最多季數<input id="lobby-rounds" type="number" min="2" max="50" value="${h(room.lobbyRounds)}"></label></div><button type="button" class="primary" data-room="start" ${room.lobby.length<2?'disabled':''}>開始遊戲（${room.lobby.length} 位玩家）</button><p class="room-note">${room.lobby.length<2?'至少要 2 位選好企業才能開始。':'隨時可以開始；沒選企業的裝置開始後只能觀看。'}</p>`
+    :`<p class="room-note">${mine?'選好了，等房主開始遊戲。開始前還可以換。':'選好企業後等房主開始遊戲；不選的話開始後只能觀看。'}</p>${mine?'<button type="button" class="quiet" data-room="unpick">不玩了，只觀看</button>':''}`;
+  return `<h3>1. 你的名字</h3><input id="lobby-name" class="lobby-name" maxlength="16" autocomplete="off" placeholder="例如 小明" aria-label="你的名字" value="${h(room.nameDraft||mine?.name||'')}"><h3>2. 選一家企業</h3><p class="room-note">別人選走的會變灰；開始前可以隨時換。</p><div class="lobby-roles">${roles}</div><h3>已選好 ${room.lobby.length} 位 · 房間裡 ${online.length} 台裝置</h3>${list}${end}`;
 }
 // Tells a host whose game has more players than devices why play is waiting and how to fix the count.
 function seatCountHint(){
@@ -1091,8 +1157,8 @@ function seatCountHint(){
 function roomBodyMarkup(){
   const status=room.status?`<p class="room-status${room.offline?' offline':''}" role="status">${h(room.status)}</p>`:'';
   const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
-  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section">${state?`<h3>座位</h3><p class="room-note">每台裝置各選一位玩家，這台也要選；選了就不能自己換。所有玩家都有人坐之後才能開始，選錯可以按「收回」。</p>${seatCountHint()}`:'<h3>開局步驟</h3>'}${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
-  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section">${state?'<h3>選擇你的座位</h3><p class="room-note">選一位玩家當你自己，確認後不能自己換位子，選錯請房主收回。所有玩家都有人坐之後才能開始。</p>':'<h3>接下來</h3>'}${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
+  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section">${state?`<h3>座位</h3><p class="room-note">開始時每台裝置已經對應到自己選的企業，不能自己換。有人離開時可以按「收回」，讓另一台裝置接手。</p>${seatCountHint()}${seatListMarkup()}`:lobbyMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
+  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section">${state?`<h3>座位</h3><p class="room-note">你對應的是開始前自己選的企業，不能自己換。開始後才加入的人只能觀看；有空出來的座位時可以按「坐這裡」接手。</p>${seatListMarkup()}`:lobbyMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
   const typed=$('#room-code-input')?.value??room.prefill??'';
   const fileWarning=location.protocol==='file:'?'<p class="form-error">目前是直接開啟檔案。其他裝置需要用網址（例如 GitHub Pages）開啟同一個遊戲才能加入。</p>':'';
   return `<p class="eyebrow">MULTI-DEVICE ROOM</p><h2 id="room-title">多裝置房間</h2><p class="room-lead">一台裝置建立房間，其他裝置輸入代碼加入；每台裝置只操作自己認領的玩家。</p>${fileWarning}<section class="room-section"><h3>建立房間</h3><p class="room-note">這台裝置會當主機並保存對局，遊戲期間請保持這個頁面開著。</p><button type="button" class="primary" data-room="create">建立房間</button></section><section class="room-section"><h3>加入房間</h3><div class="room-join"><input id="room-code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="例如 K7P2Q" aria-label="房間代碼" value="${h(typed)}"><button type="button" class="secondary" data-room="join">加入</button></div><p class="room-note">加入後會顯示房主的對局；離開房間就回到這台裝置原本的對局。</p></section>${error}${status}`;
@@ -1101,11 +1167,18 @@ function renderRoom(){
   promptSeat();
   const chip=$('#room-chip'),mine=room.role&&state?mySeat():null;
   chip.hidden=!room.role;
-  if(room.role)chip.textContent=`房間 ${room.code} · ${isHost()?(room.offline?'暫時離線':`${onlineClients().length} 台裝置`):room.status==='已連線'&&state?(mine?`你：${mine.name}`:'還沒選座位'):room.status}`;
+  const picked=room.lobby.find(e=>e.clientId===clientId);
+  if(room.role)chip.textContent=`房間 ${room.code} · ${isHost()?(room.offline?'暫時離線':`${onlineClients().length} 台裝置`):room.status!=='已連線'?room.status:state?(mine?`你：${mine.name}`:missingSeats().length?'還沒選座位':'觀看中'):picked?`已選：${role(picked.roleId).name}`:'還沒選企業'}`;
   $('#room-btn').classList.toggle('active',!!room.role);
   document.body.classList.toggle('room-guest',isGuest());
+  document.body.classList.toggle('room-host',isHost());
   renderSetupRoomHint();
-  if(!$('#room-modal').hidden)$('#room-body').innerHTML=roomBodyMarkup();
+  if($('#room-modal').hidden)return;
+  // Lobby updates arrive while people type their names, so keep the focused field and cursor across re-renders.
+  const active=document.activeElement,keep=active?.id&&$('#room-body').contains(active)?{id:active.id,start:active.selectionStart,end:active.selectionEnd}:null;
+  $('#room-body').innerHTML=roomBodyMarkup();
+  const el=keep&&document.getElementById(keep.id);
+  if(el){el.focus();try{el.setSelectionRange(keep.start,keep.end)}catch{}}
 }
 // Anyone without a seat is shown the seat list once per game, even if they closed the room dialog before the host started.
 function promptSeat(){
@@ -1118,12 +1191,12 @@ function promptSeat(){
 function openRoomModal(){$('#room-modal').hidden=false;renderRoom();$('#room-code-input')?.focus()}
 function closeRoomModal(){$('#room-modal').hidden=true}
 
-$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){addSetupPlayer();renderSetup()}});
-$('#setup-room-hint').addEventListener('click',e=>{const n=Number(e.target.closest('[data-match-devices]')?.dataset.matchDevices);if(!n)return;while(setupPlayers.length>n)setupPlayers.pop();while(setupPlayers.length<n)addSetupPlayer();renderSetup()});
+$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id});renderSetup()}});
+$('#setup-room-hint').addEventListener('click',e=>{if(e.target.closest('[data-open-room]'))openRoomModal()});
 $('#setup-players').addEventListener('input',e=>{if(e.target.dataset.setupName!==undefined)setupPlayers[Number(e.target.dataset.setupName)].name=e.target.value});
 $('#setup-players').addEventListener('change',e=>{if(e.target.dataset.setupRole!==undefined)setupPlayers[Number(e.target.dataset.setupRole)].roleId=e.target.value});
 $('#setup-players').addEventListener('click',e=>{const i=e.target.dataset.removePlayer;if(i!==undefined&&setupPlayers.length>2){setupPlayers.splice(Number(i),1);renderSetup()}});
-$('#start-btn').addEventListener('click',async()=>{if(isGuest())return;const devices=onlineClients().length;if(isHost()&&setupPlayers.length!==devices&&!confirm(`房間裡有 ${devices} 台裝置，但你設了 ${setupPlayers.length} 位玩家。每位玩家都要有一台裝置坐下才能開始，確定要這樣開始嗎？`))return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
+$('#start-btn').addEventListener('click',async()=>{if(room.role)return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
 $('.tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;rememberView();render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#snapshot-select').addEventListener('change',e=>{snapshotSelection=e.target.value;rememberView();renderDashboard()});
 $('#game').addEventListener('click',e=>{
@@ -1156,9 +1229,17 @@ $('#room-modal').addEventListener('click',e=>{
   else if(what==='copy-link')void copyText(roomLink(),'已複製邀請連結。');
   else if(what==='claim')claimSeatHere(b.dataset.player);
   else if(what==='kick')kickSeat(b.dataset.player);
+  else if(what==='pick')pickHere(b.dataset.role);
+  else if(what==='unpick'){if(isGuest())sendToHost({t:'unpick'})}
+  else if(what==='drop')dropFromLobby(b.dataset.client);
+  else if(what==='start')void startRoomGame();
   else if(what==='leave')leaveRoom();
 });
-$('#room-modal').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='room-code-input')void joinRoom(e.target.value)});
+$('#room-modal').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='room-code-input')void joinRoom(e.target.value);else if(e.key==='Enter'&&e.target.id==='lobby-name')e.target.blur()});
+$('#room-modal').addEventListener('input',e=>{const id=e.target.id;if(id==='lobby-name')room.nameDraft=e.target.value;else if(id==='lobby-target')room.lobbyTarget=e.target.value;else if(id==='lobby-rounds')room.lobbyRounds=e.target.value});
+// A renamed player who already picked a company sends the pick again so the lobby shows the new name.
+$('#room-modal').addEventListener('change',e=>{if(e.target.id!=='lobby-name')return;const mine=room.lobby.find(x=>x.clientId===clientId);if(mine&&mine.name!==e.target.value.trim())pickHere(mine.roleId)});
+$('#room-wait-open').addEventListener('click',openRoomModal);
 window.addEventListener('pagehide',()=>{if(isHost())for(const g of room.guests)sendSafe(g.conn,{t:'closed'})});
 // A phone that unlocks or gets its network back reconnects to the matching server right away instead of waiting for the next retry.
 window.addEventListener('online',retrySignal);
