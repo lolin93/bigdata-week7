@@ -1,7 +1,8 @@
 // Pure helpers for multi-device rooms: codes, seat ownership, net-worth ranking and validation of guest messages.
 // Networking (PeerJS) lives in app.js; everything here is deterministic so it can be unit tested.
 import {companyPosition} from './engine.js';
-export const ROOM_PREFIX='econboard-v1-';
+// v2: rooms with the company lobby; pages from before it cannot join (and break) these rooms.
+export const ROOM_PREFIX='econboard-v2-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH=5;
 const MAX_PLAYERS=8,NAME_LENGTH=16;

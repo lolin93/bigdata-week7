@@ -18,7 +18,7 @@ test('輸入的代碼會轉大寫並略過空白與連字號，格式不符則�
   assert.equal(normalizeRoomCode('ABCDEF'),null);
   assert.equal(normalizeRoomCode('ABCD0'),null);
   assert.equal(normalizeRoomCode(null),null);
-  assert.equal(roomPeerId('ABC2D'),'econboard-v1-ABC2D');
+  assert.equal(roomPeerId('ABC2D'),'econboard-v2-ABC2D');
 });
 test('還有空位時誰都不能操作，房主也不例外',()=>{
   const g=game();

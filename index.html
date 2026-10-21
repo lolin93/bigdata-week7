@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#111b28">
   <title>經濟棋局｜多人財經桌遊</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=876911f2">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand"><div id="round-badge" class="round-badge" hidden><span>目前季數</span><strong id="round-number">01</strong><small id="round-limit"></small></div><div><strong>經濟棋局</strong><small>ECONOMY BOARD GAME</small></div></div>
-      <div class="top-actions"><span id="save-status" class="save-status">本機自動儲存</span><button id="room-chip" class="room-chip" type="button" hidden></button><button id="home-btn" class="quiet" type="button">首頁</button><button id="room-btn" class="quiet" type="button">多裝置房間</button><button id="open-tab-btn" class="quiet host-only" type="button">開啟同步頁籤</button><button id="export-btn" class="quiet host-only" type="button">匯出存檔</button><label class="quiet file-btn host-only">匯入存檔<input id="import-file" type="file" accept="application/json,.json" hidden></label><button id="new-game-btn" class="quiet host-only" type="button">新遊戲</button></div>
+      <div class="top-actions"><span id="save-status" class="save-status">本機自動儲存</span><button id="room-chip" class="room-chip" type="button" hidden></button><button id="home-btn" class="quiet" type="button">首頁</button><button id="room-btn" class="quiet" type="button">多人連線</button><button id="open-tab-btn" class="quiet host-only single-only" type="button">開啟同步頁籤</button><button id="export-btn" class="quiet host-only" type="button">匯出存檔</button><label class="quiet file-btn host-only single-only">匯入存檔<input id="import-file" type="file" accept="application/json,.json" hidden></label><button id="new-game-btn" class="quiet host-only" type="button">新遊戲</button></div>
     </header>
     <main>
       <section id="home" class="home-page" aria-labelledby="home-title">
@@ -19,8 +19,8 @@
           <p class="eyebrow">遊戲玩法</p>
           <h1 id="home-title">經營企業，<br><em>走出你的經濟棋局。</em></h1>
           <p>2–8 位玩家輪流玩。每人選一家企業，走棋盤、抽事件、做經營決定，想辦法提高自己的淨資產。</p>
-          <button id="home-play-btn" class="primary" type="button">設定玩家，開始遊戲 →</button>
-          <p id="home-status" class="home-status">一台電腦就能開始，大家輪流操作。</p>
+          <div class="home-actions"><button id="home-play-btn" class="primary" type="button">一台裝置輪流玩 →</button><button id="home-room-btn" class="secondary" type="button">多人連線（每人一台）→</button></div>
+          <p id="home-status" class="home-status">一台裝置大家輪流操作，或每個人用自己的手機連線。</p>
         </div>
         <div class="home-guide" aria-label="玩法步驟">
           <div class="home-step"><span>01</span><div><h2>選玩家和企業</h2><p>選 2–8 位玩家，每人選不同的企業。開局時也能調整淨資產目標和最多季數。</p></div></div>
@@ -45,9 +45,9 @@
       </section>
       <div id="setup" class="setup-wrap" hidden>
         <section class="setup-hero"><p class="eyebrow">一台電腦・輪流遊玩・一回合代表一季</p><h1>啟動你的<br><em>經濟新局。</em></h1><p>選擇企業，啟動兩輪數字拉霸前進，讓事件改寫收入、成本與資產。棋子每秒前進一格；當所有玩家完成行動，市場與聯準會就會結算這一季。</p><div class="setup-notes"><span>24 格經濟棋盤</span><span>10 種企業</span><span>10 條聯準會規則</span></div></section>
-        <section class="setup-card"><div class="section-heading"><div><p class="eyebrow">建立對局</p><h2>設定玩家</h2></div><span class="step-pill">2–8 人</span></div><p id="setup-room-hint" class="room-wait-note setup-room-hint" hidden></p><div id="setup-players"></div><button id="add-player" type="button" class="add-player">＋ 新增玩家</button><div class="setup-options"><label>勝利淨資產目標<input id="target-input" type="number" min="2000" step="500" value="5500"></label><label>最多季數<input id="rounds-input" type="number" min="2" max="50" value="12"></label></div><p class="helper">淨資產 = 現金 + 投資資產 − 借款。達標、玩家破產或季數上限到達時結束。</p><p id="setup-error" class="form-error" role="alert"></p><button id="start-btn" class="primary big" type="button">開始遊戲 <span>→</span></button></section>
+        <section class="setup-card"><div class="section-heading"><div><p class="eyebrow">建立對局</p><h2>設定玩家</h2></div><span class="step-pill">2–8 人</span></div><div id="setup-players"></div><button id="add-player" type="button" class="add-player">＋ 新增玩家</button><div class="setup-options"><label>勝利淨資產目標<input id="target-input" type="number" min="2000" step="500" value="5500"></label><label>最多季數<input id="rounds-input" type="number" min="2" max="50" value="12"></label></div><p class="helper">淨資產 = 現金 + 投資資產 − 借款。達標、玩家破產或季數上限到達時結束。</p><p id="setup-error" class="form-error" role="alert"></p><button id="start-btn" class="primary big" type="button">開始遊戲 <span>→</span></button></section>
       </div>
-      <section id="room-wait" class="room-wait" hidden><p class="eyebrow">MULTI-DEVICE ROOM</p><h1>已加入房間，<br><em>等待房主開局。</em></h1><p>在「多裝置房間」視窗輸入名字、選一家企業，然後等房主開始遊戲；開始後棋盤會自動出現。</p><button id="room-wait-open" class="primary" type="button">輸入名字、選企業</button></section>
+      <section id="room-wait" class="room-wait" hidden><p class="eyebrow">MULTI-DEVICE ROOM</p><h1 id="room-wait-title">已加入房間，<br><em>等待房主開局。</em></h1><p id="room-wait-copy">在「多人連線」視窗輸入名字、選一家企業，然後等房主開始遊戲；開始後棋盤會自動出現。</p><button id="room-wait-open" class="primary" type="button">輸入名字、選企業</button></section>
       <div id="game" hidden>
         <nav class="tabs" aria-label="遊戲頁面"><button data-tab="business" class="active">企業經營</button><button data-tab="events">全球事件</button><button data-tab="dashboard">總體經濟儀表板</button><button data-tab="fed">AI 聯準會</button><button data-tab="history">歷史紀錄</button></nav>
         <section id="tab-business" class="tab-page active"><div class="business-grid"><div class="board-panel panel"><div class="panel-title"><div><p class="eyebrow">BOARD / 棋盤</p><h2>經濟版圖</h2></div><div class="legend"><span><i class="dot global"></i>全球</span><span><i class="dot personal"></i>個人</span><span><i class="dot sector"></i>產業</span><span><i class="ghost-legend" aria-hidden="true">👻</i>罷工</span></div></div><div id="board" class="board" aria-label="24 格棋盤"></div></div><div class="side-stack"><div class="turn-panel panel"><p class="eyebrow">CURRENT TURN</p><div id="turn-content"></div></div><div class="panel mini-panel"><div class="panel-title"><h3>本季市場快照</h3><span class="pill">預估</span></div><div id="mini-economy" class="mini-economy"></div></div><div class="panel goal-panel"><p class="eyebrow">WIN CONDITIONS</p><h3>如何獲勝</h3><p id="goal-copy"></p><div id="goal-progress"></div></div></div><section class="player-area"><div class="section-heading player-heading"><div><p class="eyebrow">PLAYER PORTFOLIOS</p><h2>玩家狀況</h2></div><span class="section-hint">事件效果已計入下方數字</span></div><div id="player-cards" class="player-grid"></div></section></div></section>
@@ -57,11 +57,11 @@
         <section id="tab-history" class="tab-page"><div class="section-heading"><div><p class="eyebrow">SEASON BY SEASON</p><h2>歷史紀錄</h2></div></div><div id="history-body"></div></section>
       </div>
     </main>
-    <footer><span>經濟棋局 · 所有數字皆為遊戲假設</span><span>同一瀏覽器開啟相同網址可同步對局，各頁籤可查看不同儀表</span></footer>
+    <footer><span>經濟棋局 · 所有數字皆為遊戲假設 · <span id="app-version">版本 876911f2</span></span><span>同一瀏覽器開啟相同網址可同步對局，各頁籤可查看不同儀表</span></footer>
   </div>
   <div id="card-modal" class="modal" hidden><div class="modal-backdrop" data-close-modal></div><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button class="modal-close" data-close-modal aria-label="關閉">×</button><p id="modal-kicker" class="eyebrow"></p><div class="modal-icon">✦</div><h2 id="modal-title"></h2><p id="modal-target"></p><div id="modal-effects"></div><button class="primary" data-close-modal>繼續經營 →</button></div></div>
   <div id="room-modal" class="modal" hidden><div class="modal-backdrop" data-close-room></div><div class="modal-card room-card" role="dialog" aria-modal="true" aria-labelledby="room-title"><button class="modal-close" type="button" data-close-room aria-label="關閉">×</button><div id="room-body"></div></div></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script defer src="./game.js"></script>
+  <script defer src="./game.js?v=876911f2"></script>
 </body>
 </html>
