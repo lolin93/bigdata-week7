@@ -100,3 +100,26 @@
 修改來源檔後，執行 `node build.mjs` 更新 `game.js`。它也會在 `index.html` 裡蓋上版本號（`game.js?v=…`、`styles.css?v=…` 和頁尾的「版本」），兩者要一起提交。
 
 本遊戲的數字依據提供的 MVP 規格，僅供遊戲使用。借款增加現金及負債，存量風險會進入總體儀表板；額外借款尚未單獨產生每季利息，企業利息仍依角色基準與聯準會政策計算。
+
+## 一起開發（給協作者）
+
+想幫忙加功能的人，請照下面的方式做。更細的規則（包括多人連線怎麼接新功能）寫在 [AGENTS.md](./AGENTS.md)。
+
+```
+main（原作品，作業 PR 的 base，不要動）
+  └─ feature/my-improvement（目前成果，線上網站從這裡部署）
+       ├─ feature/merger（併吞系統）
+       └─ feature/<你的功能>
+```
+
+1. **取得權限**：請 Repo 擁有者把你加為 Collaborator（GitHub → Settings → Collaborators），就能直接在這個 Repo 開分支。沒有權限的話，先 Fork 這個 Repo，在自己的 Fork 上做。
+2. **先講好分工**：開工前跟大家說要做什麼、大概會改哪些檔案，避免兩個人同時大改同一個檔案（尤其是 `app.js`）。
+3. **開分支**：從 `feature/my-improvement` 開新分支，命名 `feature/<功能名>`。不要從 `main` 開，也不要改 `main`。
+4. **讓 AI 工具先讀 AGENTS.md**：用 Codex 等工具時，切到上面的分支再開始，工具會自動讀 `AGENTS.md`。不確定的話，先問它「AGENTS.md 有哪些規則」。
+5. **改完要建置和測試**（需要 Node.js 18 以上）：
+   - `node build.mjs`：更新 `game.js`，並在 `index.html` 蓋上新的版本號。`game.js` 和 `index.html` 要和來源檔一起提交。
+   - `node --test`：所有測試都要通過。
+   - `node serve.mjs`：在本機 `http://127.0.0.1:4173/` 試玩。
+6. **動到多人連線的格式時**：如果改了房間訊息或遊戲狀態（`state`）的格式，要把 `room.js` 的 `ROOM_PREFIX` 版本號往上加（例如 `econboard-v2-` → `econboard-v3-`），讓新舊版本的頁面進不了同一個房間。
+7. **多支手機測試**：線上網站只部署 `feature/my-improvement`。要在合併前用手機測，請在自己的 Fork 開 GitHub Pages，指向自己的分支。
+8. **開 PR**：做完開 Pull Request，**base 選 `feature/my-improvement`**，說明改了什麼、怎麼測的。Repo 擁有者看過差異後再合併，合併後網站會自動更新。
