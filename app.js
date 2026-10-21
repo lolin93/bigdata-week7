@@ -97,10 +97,14 @@ async function withGameLock(work){
   if(globalThis.navigator?.locks?.request)return navigator.locks.request(`${storageKey}-write`,{mode:'exclusive'},work);
   return work();
 }
+const BUSY_MESSAGE='棋盤正在播放動畫，請稍候再試。';
+// Resolves to an error message when the action did not go through, so a room host can report it to the guest.
 async function run(fn){
-  if(animation)return;
-  try{await withGameLock(()=>{if(!ensureFresh())return;fn();save();render()})}
-  catch(e){notify(e.message||'操作失敗')}
+  if(animation)return BUSY_MESSAGE;
+  let error=null;
+  try{await withGameLock(()=>{if(!ensureFresh()){error='對局已由其他頁籤更新，請確認後再操作。';return}fn();save();render()})}
+  catch(e){error=e.message||'操作失敗';notify(error)}
+  return error;
 }
 
 function homeFlowLabel(metric,value){
