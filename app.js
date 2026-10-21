@@ -51,7 +51,7 @@ const viewKey='economy-board-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
 const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
 // Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
-const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
+const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
 let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
@@ -437,6 +437,9 @@ let peerLoading=null;
 const CONNECT_TIMEOUT_MS=15000;
 const P2P_FAILED='連不上房主：房間有找到，但兩台裝置之間的直接連線沒有建立成功。學校或公司網路常會擋這種連線，建議所有裝置都改連同一個手機熱點後再試一次。';
 const SIGNAL_FAILED='連線逾時：連不上配對伺服器，請確認網路後再試。';
+const ROOM_NOT_FOUND='找不到這個房間。請確認代碼沒有打錯；如果沒錯，請房主確認遊戲頁面開在最前面：手機鎖螢幕、切到別的 App 或頁籤時，房間會暫時離線；房主重新整理頁面則會換新代碼。';
+// PeerJS emits 'disconnected' again after every failed reconnect, so attempts are spaced out instead of looping.
+const SIGNAL_RETRY_MS=5000;
 // PeerJS is only fetched when a room is used, so single-device play never needs the network.
 function loadPeerJs(){
   if(globalThis.Peer)return Promise.resolve();
@@ -461,8 +464,8 @@ function broadcastRoom(){
 }
 function resetRoom(extra={}){
   const peer=room.peer;
-  clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);
-  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,synced:false},extra);
+  clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);clearTimeout(room.signalTimer);
+  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,synced:false},extra);
   setTimeout(()=>{try{peer?.destroy()}catch{}},300);
 }
 
@@ -474,17 +477,35 @@ async function createRoom(){
 }
 function openHostPeer(attempt){
   const code=makeRoomCode(),peer=new Peer(roomPeerId(code));
-  Object.assign(room,{role:'host',code,peer,closed:false,hostClientId:clientId,status:'正在建立房間…',error:''});
-  peer.on('open',()=>{if(room.peer!==peer)return;room.status='房間已開啟，等待其他裝置加入';render()});
+  let opened=false;
+  Object.assign(room,{role:'host',code,peer,closed:false,hostClientId:clientId,status:'正在建立房間…',error:'',offline:false});
+  peer.on('open',()=>{
+    if(room.peer!==peer)return;
+    if(room.offline)notify('房間恢復連線，其他裝置可以再加入了。');
+    opened=true;room.offline=false;room.status='房間已開啟，等待其他裝置加入';render();
+  });
   peer.on('connection',conn=>{if(room.peer===peer)acceptGuest(conn)});
-  peer.on('disconnected',()=>{if(room.peer===peer&&!peer.destroyed)try{peer.reconnect()}catch{}});
+  peer.on('disconnected',()=>{if(room.peer===peer&&opened)hostSignalLost()});
   peer.on('error',err=>{
     if(room.peer!==peer)return;
+    // Once the code is handed out, losing the matching server only ends in 'disconnected': the room, its code
+    // and the guests already connected stay, and the same code is registered again when the server is back.
+    if(opened)return;
     if(err.type==='unavailable-id'&&attempt<4){peer.destroy();openHostPeer(attempt+1);return}
-    if(peer.open){room.status='與配對伺服器的連線不穩；已加入的裝置仍可繼續遊玩';renderRoom();return}
     resetRoom({error:`無法建立房間（${err.type||'未知錯誤'}），請確認網路後再試。`});render();
   });
   render();
+}
+function hostSignalLost(){
+  if(!room.offline)notify('房間暫時離線，新的裝置暫時加不進來；恢復後會通知你。');
+  room.offline=true;room.status='房間暫時離線：已加入的裝置可以繼續玩，新的裝置要等恢復連線才能加入。正在自動重新連線…';
+  scheduleSignalRetry();renderRoom();
+}
+function scheduleSignalRetry(){clearTimeout(room.signalTimer);room.signalTimer=setTimeout(retrySignal,SIGNAL_RETRY_MS)}
+function retrySignal(){
+  clearTimeout(room.signalTimer);room.signalTimer=null;
+  const peer=room.peer;
+  if(peer?.disconnected&&!peer.destroyed)try{peer.reconnect()}catch{}
 }
 function acceptGuest(conn){
   const guest={conn,clientId:null};
@@ -542,11 +563,11 @@ async function joinRoom(input){
   Object.assign(room,{role:'guest',code,peer,closed:false,retries:0,synced:false,status:'正在連線…'});
   armConnectTimeout();
   peer.on('open',()=>{if(room.peer===peer)connectToHost()});
-  peer.on('disconnected',()=>{if(room.peer===peer&&!peer.destroyed)try{peer.reconnect()}catch{}});
+  peer.on('disconnected',()=>{if(room.peer===peer)scheduleSignalRetry()});
   peer.on('error',err=>{
     if(room.peer!==peer)return;
     if(room.synced){if(err.type==='peer-unavailable')scheduleReconnect();return}
-    failJoin(err.type==='peer-unavailable'?'找不到這個房間，請確認代碼，或請房主先建立房間。':`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`);
+    failJoin(err.type==='peer-unavailable'?ROOM_NOT_FOUND:`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`);
   });
   render();
 }
@@ -626,7 +647,7 @@ function seatListMarkup(){
   }).join('')}</ul>`;
 }
 function roomBodyMarkup(){
-  const status=room.status?`<p class="room-status" role="status">${h(room.status)}</p>`:'';
+  const status=room.status?`<p class="room-status${room.offline?' offline':''}" role="status">${h(room.status)}</p>`:'';
   const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
   if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section"><h3>座位</h3><p class="room-note">每台裝置認領一位玩家；沒人坐的座位由這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
   if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section"><h3>選擇你的座位</h3><p class="room-note">坐下後，輪到這位玩家時就由你這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
@@ -637,7 +658,7 @@ function roomBodyMarkup(){
 function renderRoom(){
   const chip=$('#room-chip');
   chip.hidden=!room.role;
-  if(room.role)chip.textContent=isHost()?`房間 ${room.code} · ${onlineClients().length} 台裝置`:`房間 ${room.code} · ${room.status}`;
+  if(room.role)chip.textContent=isHost()?`房間 ${room.code} · ${room.offline?'暫時離線':`${onlineClients().length} 台裝置`}`:`房間 ${room.code} · ${room.status}`;
   $('#room-btn').classList.toggle('active',!!room.role);
   document.body.classList.toggle('room-guest',isGuest());
   if(!$('#room-modal').hidden)$('#room-body').innerHTML=roomBodyMarkup();
@@ -687,6 +708,9 @@ $('#room-modal').addEventListener('click',e=>{
 });
 $('#room-modal').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='room-code-input')void joinRoom(e.target.value)});
 window.addEventListener('pagehide',()=>{if(isHost())for(const g of room.guests)sendSafe(g.conn,{t:'closed'})});
+// A phone that unlocks or gets its network back reconnects to the matching server right away instead of waiting for the next retry.
+window.addEventListener('online',retrySignal);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)retrySignal()});
 async function resetGame(){
   if(isGuest()){notify('只有房主可以開始新遊戲。');return}
   if(state&&!confirm(`確定開始新遊戲？所有已開啟的頁籤${isHost()?'與房間裡的裝置':''}都會返回設定畫面，建議先匯出備份。`))return;
