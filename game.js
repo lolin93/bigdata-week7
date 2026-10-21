@@ -349,7 +349,7 @@ function isNewerGame(incoming,current){
 }
 
 
-// Pure helpers for multi-device rooms: codes, seat ownership and validation of guest messages.
+// Pure helpers for multi-device rooms: codes, seat ownership, net-worth ranking and validation of guest messages.
 // Networking (PeerJS) lives in app.js; everything here is deterministic so it can be unit tested.
 const ROOM_PREFIX='econboard-v1-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -366,26 +366,32 @@ function normalizeRoomCode(input){
 }
 const roomPeerId=code=>`${ROOM_PREFIX}${code}`;
 
-// A seat held by a device is operated only by that device; seats nobody took stay with the host.
-function seatController(seats,hostClientId,playerId){return seats[playerId]||hostClientId}
-function canAct(seats,hostClientId,game,clientId){
+// Every player needs a device (the host included); play waits until all seats are taken,
+// then only the device seated at the current player may act.
+function emptySeats(seats,playerIds){return playerIds.filter(id=>!seats[id])}
+function canAct(seats,game,clientId){
   if(!game||game.status!=='playing')return false;
+  if(emptySeats(seats,game.players.map(p=>p.id)).length)return false;
   const player=game.players[game.turnIndex];
-  return !!player&&seatController(seats,hostClientId,player.id)===clientId;
+  return !!player&&seats[player.id]===clientId;
 }
+// A seat is locked once taken: a device cannot switch seats itself; only the host can free one (releaseSeat).
 function claimSeat(seats,playerIds,playerId,clientId){
   if(!playerIds.includes(playerId))throw Error('沒有這位玩家。');
   const owner=seats[playerId];
-  if(owner&&owner!==clientId)throw Error('這個座位已經有人坐了。');
-  const next=Object.fromEntries(Object.entries(seats).filter(([,id])=>id!==clientId));
-  next[playerId]=clientId;
-  return next;
+  if(owner===clientId)return seats;
+  if(owner)throw Error('這個座位已經有人坐了。');
+  if(Object.values(seats).includes(clientId))throw Error('你已經選好座位了；要換位子請房主收回。');
+  return {...seats,[playerId]:clientId};
 }
 function releaseSeat(seats,playerId){
   const next={...seats};delete next[playerId];return next;
 }
-function releaseClient(seats,clientId){
-  return Object.fromEntries(Object.entries(seats).filter(([,id])=>id!==clientId));
+
+// Net worth is computed in one place so a later rule (for example a player owning several companies) only changes this.
+function netWorthRanking(game){
+  const rows=game.players.map(player=>({player,netWorth:companyPosition(game,player.roleId).netWorth}));
+  return rows.map(row=>({...row,rank:1+rows.filter(r=>r.netWorth>row.netWorth).length})).sort((a,b)=>a.rank-b.rank);
 }
 
 const safeId=v=>typeof v==='string'&&/^[\w-]{1,64}$/.test(v)?v:null;
@@ -394,7 +400,6 @@ function parseGuestMessage(raw){
   if(!raw||typeof raw!=='object')return null;
   if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
   if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
-  if(raw.t==='release')return {t:'release'};
   if(raw.t==='action'&&GUEST_ACTIONS.includes(raw.action)){
     if(!AMOUNT_ACTIONS.includes(raw.action))return {t:'action',action:raw.action};
     const amount=Number(raw.amount);
@@ -453,7 +458,7 @@ const viewKey='economy-board-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
 const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
 // Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
-const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
+const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
 let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
@@ -548,7 +553,7 @@ function currentCard(){
 function cardCenter(){
   if(!animation&&state.phase==='draw'){
     const scope=BOARD[currentPlayer().position].type;
-    return `<div class="card-scene scope-${scope}"><p class="card-hint">停在${scopes[scope]}格 · 輪到你抽卡</p><button class="draw-deck" type="button" data-action="draw-card" aria-label="點擊抽${scopes[scope]}卡"><span class="deck-shadow" aria-hidden="true"></span><span class="deck-back"><span>✦</span><strong>${scopes[scope]}</strong><small>點一下抽卡</small></span></button><p class="card-instruction">卡片正在洗牌，點擊卡背翻開結果</p></div>`;
+    return `<div class="card-scene scope-${scope}"><p class="card-hint">停在${scopes[scope]}格 · 輪到${turnWho()}抽卡</p><button class="draw-deck" type="button" data-action="draw-card" aria-label="點擊抽${scopes[scope]}卡"><span class="deck-shadow" aria-hidden="true"></span><span class="deck-back"><span>✦</span><strong>${scopes[scope]}</strong><small>點一下抽卡</small></span></button><p class="card-instruction">卡片正在洗牌，點擊卡背翻開結果</p></div>`;
   }
   const shown=!animation&&currentCard();
   if(shown){
@@ -598,9 +603,15 @@ function gateTurnControls(){
   if(playing?iCanAct():!isGuest())return;
   document.querySelectorAll('#turn-content button,#turn-content input').forEach(x=>{x.disabled=true});
   if(!playing)return;
-  const p=currentPlayer(),who=seatController(room.seats,roomHostId(),p.id)===roomHostId()?'房主':'另一台裝置';
-  const seated=isHost()||Object.values(room.seats).includes(clientId);
-  $('#turn-content').insertAdjacentHTML('beforeend',`<p class="room-wait-note">現在由${who}操作「${h(p.name)}」${seated?'，輪到你的玩家時才能操作。':'。按右上角「多裝置房間」選一個座位，就能操作自己的玩家。'}</p>`);
+  $('#turn-content').insertAdjacentHTML('beforeend',`<p class="room-wait-note">${h(roomTurnNote())}</p>`);
+}
+// Turn texts say "你" only to the device that may act; everyone else sees whose turn it is.
+function turnWho(){return iCanAct()?'你':`「${h(currentPlayer().name)}」`}
+function roomTurnNote(){
+  const missing=missingSeats(),mine=mySeat(),pick='按右上角「多裝置房間」選一位玩家。';
+  if(missing.length)return `等待入座：還差${missing.map(p=>`「${p.name}」`).join('、')}。每位玩家都有人坐之後才能開始。${mine?'':pick}`;
+  if(!mine)return '所有座位都有人了，你目前只能觀看。';
+  return `現在輪到「${currentPlayer().name}」。你是「${mine.name}」，輪到你時才能操作。`;
 }
 function renderBoardContent(){
   const pos=state.players.map(p=>({p,index:animation?.playerId===p.id?animation.position:p.position}));
@@ -656,7 +667,7 @@ function renderTurnContent(){
     $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="done"></span><span></span></div><p class="turn-meta">拉出 <strong>${state.reels.join(' + ')} = ${state.dice}</strong>，停在「${h(tileName(BOARD[p.position],p.position))}」。${waiting?'請點棋盤中央流動的卡片，親手抽出事件。':'事件已翻開。看完卡片後，按「繼續經營」。'}</p>`;
     return;
   }
-  $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="${done?'done':''}"></span><span></span></div>${!done?`<p class="turn-meta">輪到你啟動拉霸。兩個轉輪各顯示 0–6，相加就是前進格數。</p><button class="primary" data-action="roll">啟動拉霸　▦</button>`:`<p class="turn-meta">拉出 <strong>${state.reels?.join(' + ')||'舊回合'} = ${state.dice}</strong>，停在「${h(tileName(BOARD[p.position],p.position))}」。${state.dice===0?'本次原地停留，不抽事件卡。':'完成經營後交給下一位玩家。'}</p><div class="action-block"><h4>員工調整 · 目前 ${state.companies[p.roleId].headcount} 人</h4><p>聘僱與裁員會改變全市場失業率及本企業人力成本。</p>${actionRow('staff-count',[['聘僱','hire'],['裁員','layoff']])}</div><div class="action-block"><h4>銀行借貸 · 未償 ${money(state.companies[p.roleId].debt)}</h4><p>借款增加現金與負債，不計入收入。銀行流動資產 ${money(state.bank.liquidAssets)}。</p>${actionRow('loan-amount',[['借款','loan'],['還款','repay']])}</div>${p.roleId==='bank'?`<div class="action-block"><h4>銀行壞帳</h4><p>目前不良放款 ${money(state.bank.nonperformingLoans)}。</p>${actionRow('bad-amount',[['認列','mark-bad'],['收回','recover-bad']])}</div>`:''}<button class="secondary" style="margin-top:18px" data-action="end-turn">${state.turnIndex===state.players.length-1?'結算本季 →':'交給下一位 →'}</button>`}`;
+  $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="${done?'done':''}"></span><span></span></div>${!done?`<p class="turn-meta">輪到${turnWho()}啟動拉霸。兩個轉輪各顯示 0–6，相加就是前進格數。</p><button class="primary" data-action="roll">啟動拉霸　▦</button>`:`<p class="turn-meta">拉出 <strong>${state.reels?.join(' + ')||'舊回合'} = ${state.dice}</strong>，停在「${h(tileName(BOARD[p.position],p.position))}」。${state.dice===0?'本次原地停留，不抽事件卡。':'完成經營後交給下一位玩家。'}</p><div class="action-block"><h4>員工調整 · 目前 ${state.companies[p.roleId].headcount} 人</h4><p>聘僱與裁員會改變全市場失業率及本企業人力成本。</p>${actionRow('staff-count',[['聘僱','hire'],['裁員','layoff']])}</div><div class="action-block"><h4>銀行借貸 · 未償 ${money(state.companies[p.roleId].debt)}</h4><p>借款增加現金與負債，不計入收入。銀行流動資產 ${money(state.bank.liquidAssets)}。</p>${actionRow('loan-amount',[['借款','loan'],['還款','repay']])}</div>${p.roleId==='bank'?`<div class="action-block"><h4>銀行壞帳</h4><p>目前不良放款 ${money(state.bank.nonperformingLoans)}。</p>${actionRow('bad-amount',[['認列','mark-bad'],['收回','recover-bad']])}</div>`:''}<button class="secondary" style="margin-top:18px" data-action="end-turn">${state.turnIndex===state.players.length-1?'結算本季 →':'交給下一位 →'}</button>`}`;
 }
 function activeForPlayer(a,p){return a.scope==='global'||a.scope==='personal'&&a.ownerId===p.id||a.scope==='sector'&&a.sector===role(p.roleId).sector}
 function effectTextForActive(a,roleId){
@@ -667,13 +678,19 @@ function renderPlayers(){
   const played=state.players.slice(0,state.turnIndex),upcoming=state.players.slice(state.turnIndex+1);
   const narrowPair=twoColumnPlayerCards.matches;
   const ordered=state.status==='playing'?[state.players[state.turnIndex],...(narrowPair?played:upcoming),...(narrowPair?upcoming:played)]:state.players;
-  $('#player-cards').innerHTML=ordered.map(p=>{
+  // In a room each device shows only its own player in full; everyone appears in the net-worth ranking, which keeps this column short.
+  const mine=room.role?mySeat():null,shown=room.role?(mine?[mine]:[]):ordered;
+  $('#player-cards').innerHTML=shown.map(p=>{
     const r=role(p.roleId),f=financials(state,p.roleId),pos=companyPosition(state,p.roleId),c=state.companies[p.roleId];
     const events=state.activeEvents.filter(a=>activeForPlayer(a,p)&&eventRemaining(a,state.round)>0);
     const playerIndex=state.players.indexOf(p);
     const turnState=state.status==='playing'?(playerIndex===state.turnIndex?'current':playerIndex<state.turnIndex?'played':'waiting'):'';
-    return `<article class="player-card ${turnState}" style="--player-color:${colors[p.color]}"><div class="player-card-head"><div class="player-identity"><span class="role-icon">${r.icon}</span><div><h3>${h(p.name)}</h3><small>${h(r.name)} · ${h(r.sector)}</small></div></div><span class="position-label">第 ${p.position} 格</span></div><div class="wealth-line"><span>目前淨資產</span><strong>${signed(pos.netWorth)}</strong></div><div class="finance-grid"><div class="finance-stat positive"><span>本季收入</span><strong>${signed(f.revenue+f.otherIncome)}</strong></div><div class="finance-stat negative"><span>本季成本</span><strong>${signed(f.costs)}</strong></div><div class="finance-stat ${f.profit>=0?'positive':'negative'}"><span>預估淨利</span><strong>${signed(f.profit)}</strong></div><div class="finance-stat"><span>現金</span><strong>${money(c.cash)}</strong></div><div class="finance-stat"><span>投資資產</span><strong>${money(pos.assetValue)}</strong></div><div class="finance-stat"><span>借款／員工</span><strong>${money(c.debt)} / ${c.headcount}</strong></div></div><div class="event-impact"><div class="event-impact-head"><span>作用中的事件與影響</span><span>${events.length} 張</span></div>${events.length?events.map(a=>`<div class="effect-entry"><i class="dot scope-dot ${a.scope}"></i><span><b>${h(event(a.eventId).name)}</b> · 剩 ${eventRemaining(a,state.round)} 季<br><em>${h(effectTextForActive(a,p.roleId))}</em></span></div>`).join(''):'<span class="no-events">目前沒有適用的事件</span>'}</div><details class="finance-details"><summary>查看十項收支與事件後數值</summary><table class="flow-table"><tbody>${METRICS.map(m=>`<tr><td>${METRIC_LABELS[m]}</td><td>${signed(f.flows[m])}</td></tr>`).join('')}</tbody></table></details></article>`;
-  }).join('');
+    return `<article class="player-card ${turnState} ${p===mine?'mine':''}" style="--player-color:${colors[p.color]}"><div class="player-card-head"><div class="player-identity"><span class="role-icon">${r.icon}</span><div><h3>${h(p.name)}${p===mine?'<span class="you-badge">你</span>':''}</h3><small>${h(r.name)} · ${h(r.sector)}</small></div></div><span class="position-label">第 ${p.position} 格</span></div><div class="wealth-line"><span>目前淨資產</span><strong>${signed(pos.netWorth)}</strong></div><div class="finance-grid"><div class="finance-stat positive"><span>本季收入</span><strong>${signed(f.revenue+f.otherIncome)}</strong></div><div class="finance-stat negative"><span>本季成本</span><strong>${signed(f.costs)}</strong></div><div class="finance-stat ${f.profit>=0?'positive':'negative'}"><span>預估淨利</span><strong>${signed(f.profit)}</strong></div><div class="finance-stat"><span>現金</span><strong>${money(c.cash)}</strong></div><div class="finance-stat"><span>投資資產</span><strong>${money(pos.assetValue)}</strong></div><div class="finance-stat"><span>借款／員工</span><strong>${money(c.debt)} / ${c.headcount}</strong></div></div><div class="event-impact"><div class="event-impact-head"><span>作用中的事件與影響</span><span>${events.length} 張</span></div>${events.length?events.map(a=>`<div class="effect-entry"><i class="dot scope-dot ${a.scope}"></i><span><b>${h(event(a.eventId).name)}</b> · 剩 ${eventRemaining(a,state.round)} 季<br><em>${h(effectTextForActive(a,p.roleId))}</em></span></div>`).join(''):'<span class="no-events">目前沒有適用的事件</span>'}</div><details class="finance-details"><summary>查看十項收支與事件後數值</summary><table class="flow-table"><tbody>${METRICS.map(m=>`<tr><td>${METRIC_LABELS[m]}</td><td>${signed(f.flows[m])}</td></tr>`).join('')}</tbody></table></details></article>`;
+  }).join('')+(room.role?rankingMarkup(mine):'');
+}
+function rankingMarkup(mine){
+  const current=state.status==='playing'?currentPlayer():null;
+  return `<section class="net-ranking" aria-labelledby="net-ranking-title"><h3 id="net-ranking-title">淨資產排行</h3><ol>${netWorthRanking(state).map(({player:p,netWorth,rank})=>`<li class="${p===mine?'mine':''} ${p===current?'current':''}"><span class="rank">${rank}</span><span class="rank-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}${p===mine?'（你）':''}</strong><small>${h(role(p.roleId).name)}${p===current?' · 目前回合':''}</small></div><span class="rank-worth">${money(netWorth)}</span></li>`).join('')}</ol></section>`;
 }
 function renderMini(){const s=makeSnapshot(state);const fields=[['預估通膨',`${decimal(s.inflationPct,2)}%`],['預估成長',s.growthPct===null?'資料不足':`${decimal(s.growthPct,1)}%`],['失業率',`${decimal(s.unemploymentPct,1)}%`],['政策利率',`${decimal(s.fedRatePct,2)}%`]];$('#mini-economy').innerHTML=fields.map(([label,value])=>`<div class="mini-stat"><span>${label}</span><strong>${value}</strong></div>`).join('')}
 function renderGoals(){
@@ -851,7 +868,10 @@ function isHost(){return room.role==='host'}
 function isGuest(){return room.role==='guest'}
 function roomHostId(){return isHost()?clientId:room.hostClientId}
 function syncSeats(){const gameId=state?syncInfo(state).gameId:null;if(room.seatsGameId!==gameId){room.seats={};room.seatsGameId=gameId}}
-function iCanAct(){if(!room.role)return true;if(isHost())syncSeats();return canAct(room.seats,roomHostId(),state,clientId)}
+function iCanAct(){if(!room.role)return true;if(isHost())syncSeats();return canAct(room.seats,state,clientId)}
+function mySeat(){if(isHost())syncSeats();const id=Object.keys(room.seats).find(k=>room.seats[k]===clientId);return state?.players.find(p=>p.id===id)||null}
+function missingSeats(){if(isHost())syncSeats();return state?emptySeats(room.seats,state.players.map(p=>p.id)).map(id=>state.players.find(p=>p.id===id)):[]}
+const SEATS_MISSING='還有玩家沒入座，大家都坐好後才能開始。';
 function onlineClients(){return isHost()?[clientId,...[...room.guests].filter(g=>g.clientId&&g.conn.open).map(g=>g.clientId)]:room.online}
 function sendSafe(conn,message){try{if(conn?.open)conn.send(message)}catch{}}
 function roomSnapshot(welcome=false){
@@ -867,7 +887,7 @@ function broadcastRoom(){
 function resetRoom(extra={}){
   const peer=room.peer;
   clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);clearTimeout(room.signalTimer);
-  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,synced:false},extra);
+  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,synced:false},extra);
   setTimeout(()=>{try{peer?.destroy()}catch{}},300);
 }
 
@@ -940,12 +960,11 @@ function onGuestMessage(guest,raw){
     try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),msg.playerId,guest.clientId)}catch(e){reject(e.message);return}
     broadcastRoom();render();return;
   }
-  if(msg.t==='release'){room.seats=releaseClient(room.seats,guest.clientId);broadcastRoom();render();return}
   // Actions run one at a time and the turn owner is checked when each one runs, so a double-clicked
   // "交給下一位" cannot end the next player's turn too.
   room.queue=room.queue.then(async()=>{
     syncSeats();
-    if(!state||!canAct(room.seats,clientId,state,guest.clientId)){reject('還沒輪到你操作。');return}
+    if(!state||!canAct(room.seats,state,guest.clientId)){reject(missingSeats().length?SEATS_MISSING:'還沒輪到你操作。');return}
     const error=await applyAction(msg.action,msg.amount,true);
     if(error)reject(error);
   }).catch(()=>{});
@@ -1021,13 +1040,14 @@ function onHostMessage(msg){
 }
 function sendToHost(message){if(!room.hostConn?.open){notify('尚未連上房主，請稍候。');return}sendSafe(room.hostConn,message)}
 function claimSeatHere(playerId){
+  const player=state?.players.find(p=>p.id===playerId);
+  if(!player||!confirm(`確定要當「${player.name}」嗎？確認後就不能自己換位子${isHost()?'；要換可以先收回自己的座位':'，選錯了請房主收回'}。`))return;
   if(isGuest()){sendToHost({t:'claim',playerId});return}
   if(!isHost()||!state)return;
   syncSeats();
   try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),playerId,clientId)}catch(e){notify(e.message);return}
   broadcastRoom();render();
 }
-function releaseMySeat(){if(isGuest()){sendToHost({t:'release'});return}room.seats=releaseClient(room.seats,clientId);broadcastRoom();render()}
 function kickSeat(playerId){if(!isHost())return;room.seats=releaseSeat(room.seats,playerId);broadcastRoom();render()}
 function leaveRoom(){
   if(isHost()){if(!confirm('關閉房間後，其他裝置會停止同步。要關閉嗎？'))return;closeRoom();notify('房間已關閉。');return}
@@ -1040,30 +1060,40 @@ function roomLink(){const url=new URL(location.href);url.search='';url.hash='';u
 async function copyText(text,done){try{await navigator.clipboard.writeText(text);notify(done)}catch{notify(`無法自動複製，請手動記下：${text}`)}}
 function seatListMarkup(){
   if(!state)return `<p class="room-note">${isHost()?'開始對局後':'房主開始對局後'}，這裡會列出每位玩家的座位。</p>`;
-  const host=roomHostId(),online=onlineClients();
+  const host=roomHostId(),online=onlineClients(),seated=!!mySeat();
   return `<ul class="room-seats">${state.players.map(p=>{
     const owner=room.seats[p.id],mine=owner===clientId;
-    const who=mine?'你':!owner?(isHost()?'空位 · 由你（房主）操作':'空位 · 由房主操作'):owner===host?'房主':online.includes(owner)?'另一台裝置':'離線中的裝置';
-    const button=mine?'<button type="button" class="secondary" data-room="release">離開座位</button>':!owner?`<button type="button" class="secondary" data-room="claim" data-player="${h(p.id)}">坐這裡</button>`:isHost()?`<button type="button" class="quiet" data-room="kick" data-player="${h(p.id)}">收回</button>`:'';
+    const who=mine?'你':!owner?'空位':owner===host?'房主':online.includes(owner)?'另一台裝置':'離線中的裝置';
+    // Seats are locked once taken: only the host can free one; a seated device sees no other seat to take.
+    const button=owner&&isHost()?`<button type="button" class="quiet" data-room="kick" data-player="${h(p.id)}">收回</button>`:mine?'<span class="room-seat-locked">已鎖定</span>':!owner&&!seated?`<button type="button" class="secondary" data-room="claim" data-player="${h(p.id)}">坐這裡</button>`:'';
     return `<li class="room-seat ${mine?'mine':''}"><span class="room-seat-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}</strong><small>${h(role(p.roleId).name)} · ${who}</small></div>${button}</li>`;
   }).join('')}</ul>`;
 }
 function roomBodyMarkup(){
   const status=room.status?`<p class="room-status${room.offline?' offline':''}" role="status">${h(room.status)}</p>`:'';
   const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
-  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section"><h3>座位</h3><p class="room-note">每台裝置認領一位玩家；沒人坐的座位由這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
-  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section"><h3>選擇你的座位</h3><p class="room-note">坐下後，輪到這位玩家時就由你這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
+  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section"><h3>座位</h3><p class="room-note">每台裝置各選一位玩家，這台也要選；選了就不能自己換。所有玩家都有人坐之後才能開始，選錯可以按「收回」。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
+  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section"><h3>選擇你的座位</h3><p class="room-note">選一位玩家當你自己，確認後不能自己換位子，選錯請房主收回。所有玩家都有人坐之後才能開始。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
   const typed=$('#room-code-input')?.value??room.prefill??'';
   const fileWarning=location.protocol==='file:'?'<p class="form-error">目前是直接開啟檔案。其他裝置需要用網址（例如 GitHub Pages）開啟同一個遊戲才能加入。</p>':'';
   return `<p class="eyebrow">MULTI-DEVICE ROOM</p><h2 id="room-title">多裝置房間</h2><p class="room-lead">一台裝置建立房間，其他裝置輸入代碼加入；每台裝置只操作自己認領的玩家。</p>${fileWarning}<section class="room-section"><h3>建立房間</h3><p class="room-note">這台裝置會當主機並保存對局，遊戲期間請保持這個頁面開著。</p><button type="button" class="primary" data-room="create">建立房間</button></section><section class="room-section"><h3>加入房間</h3><div class="room-join"><input id="room-code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="例如 K7P2Q" aria-label="房間代碼" value="${h(typed)}"><button type="button" class="secondary" data-room="join">加入</button></div><p class="room-note">加入後會顯示房主的對局；離開房間就回到這台裝置原本的對局。</p></section>${error}${status}`;
 }
 function renderRoom(){
-  const chip=$('#room-chip');
+  promptSeat();
+  const chip=$('#room-chip'),mine=room.role&&state?mySeat():null;
   chip.hidden=!room.role;
-  if(room.role)chip.textContent=isHost()?`房間 ${room.code} · ${room.offline?'暫時離線':`${onlineClients().length} 台裝置`}`:`房間 ${room.code} · ${room.status}`;
+  if(room.role)chip.textContent=`房間 ${room.code} · ${isHost()?(room.offline?'暫時離線':`${onlineClients().length} 台裝置`):room.status==='已連線'&&state?(mine?`你：${mine.name}`:'還沒選座位'):room.status}`;
   $('#room-btn').classList.toggle('active',!!room.role);
   document.body.classList.toggle('room-guest',isGuest());
   if(!$('#room-modal').hidden)$('#room-body').innerHTML=roomBodyMarkup();
+}
+// Anyone without a seat is shown the seat list once per game, even if they closed the room dialog before the host started.
+function promptSeat(){
+  if(!room.role||state?.status!=='playing'||isGuest()&&!room.synced)return;
+  const gameId=syncInfo(state).gameId;
+  if(room.seatPromptFor===gameId)return;
+  room.seatPromptFor=gameId;
+  if(!mySeat()&&missingSeats().length)$('#room-modal').hidden=false;
 }
 function openRoomModal(){$('#room-modal').hidden=false;renderRoom();$('#room-code-input')?.focus()}
 function closeRoomModal(){$('#room-modal').hidden=true}
@@ -1080,7 +1110,7 @@ $('#game').addEventListener('click',e=>{
   const action=a.dataset.action;
   if(action==='new-game'){void resetGame();return}
   if(action==='dismiss-card'){if(animation)return;dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();return}
-  if(!iCanAct()){notify('還沒輪到你，請等待目前的玩家操作。');return}
+  if(!iCanAct()){notify(missingSeats().length?SEATS_MISSING:'還沒輪到你，請等待目前的玩家操作。');return}
   const amount=AMOUNT_INPUTS[action]?Number($(AMOUNT_INPUTS[action])?.value):undefined;
   if(isGuest()){
     if(animation)return;
@@ -1104,7 +1134,6 @@ $('#room-modal').addEventListener('click',e=>{
   else if(what==='copy-code')void copyText(room.code,'已複製房間代碼。');
   else if(what==='copy-link')void copyText(roomLink(),'已複製邀請連結。');
   else if(what==='claim')claimSeatHere(b.dataset.player);
-  else if(what==='release')releaseMySeat();
   else if(what==='kick')kickSeat(b.dataset.player);
   else if(what==='leave')leaveRoom();
 });

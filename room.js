@@ -1,5 +1,6 @@
-// Pure helpers for multi-device rooms: codes, seat ownership and validation of guest messages.
+// Pure helpers for multi-device rooms: codes, seat ownership, net-worth ranking and validation of guest messages.
 // Networking (PeerJS) lives in app.js; everything here is deterministic so it can be unit tested.
+import {companyPosition} from './engine.js';
 export const ROOM_PREFIX='econboard-v1-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH=5;
@@ -15,26 +16,32 @@ export function normalizeRoomCode(input){
 }
 export const roomPeerId=code=>`${ROOM_PREFIX}${code}`;
 
-// A seat held by a device is operated only by that device; seats nobody took stay with the host.
-export function seatController(seats,hostClientId,playerId){return seats[playerId]||hostClientId}
-export function canAct(seats,hostClientId,game,clientId){
+// Every player needs a device (the host included); play waits until all seats are taken,
+// then only the device seated at the current player may act.
+export function emptySeats(seats,playerIds){return playerIds.filter(id=>!seats[id])}
+export function canAct(seats,game,clientId){
   if(!game||game.status!=='playing')return false;
+  if(emptySeats(seats,game.players.map(p=>p.id)).length)return false;
   const player=game.players[game.turnIndex];
-  return !!player&&seatController(seats,hostClientId,player.id)===clientId;
+  return !!player&&seats[player.id]===clientId;
 }
+// A seat is locked once taken: a device cannot switch seats itself; only the host can free one (releaseSeat).
 export function claimSeat(seats,playerIds,playerId,clientId){
   if(!playerIds.includes(playerId))throw Error('沒有這位玩家。');
   const owner=seats[playerId];
-  if(owner&&owner!==clientId)throw Error('這個座位已經有人坐了。');
-  const next=Object.fromEntries(Object.entries(seats).filter(([,id])=>id!==clientId));
-  next[playerId]=clientId;
-  return next;
+  if(owner===clientId)return seats;
+  if(owner)throw Error('這個座位已經有人坐了。');
+  if(Object.values(seats).includes(clientId))throw Error('你已經選好座位了；要換位子請房主收回。');
+  return {...seats,[playerId]:clientId};
 }
 export function releaseSeat(seats,playerId){
   const next={...seats};delete next[playerId];return next;
 }
-export function releaseClient(seats,clientId){
-  return Object.fromEntries(Object.entries(seats).filter(([,id])=>id!==clientId));
+
+// Net worth is computed in one place so a later rule (for example a player owning several companies) only changes this.
+export function netWorthRanking(game){
+  const rows=game.players.map(player=>({player,netWorth:companyPosition(game,player.roleId).netWorth}));
+  return rows.map(row=>({...row,rank:1+rows.filter(r=>r.netWorth>row.netWorth).length})).sort((a,b)=>a.rank-b.rank);
 }
 
 const safeId=v=>typeof v==='string'&&/^[\w-]{1,64}$/.test(v)?v:null;
@@ -43,7 +50,6 @@ export function parseGuestMessage(raw){
   if(!raw||typeof raw!=='object')return null;
   if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
   if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
-  if(raw.t==='release')return {t:'release'};
   if(raw.t==='action'&&GUEST_ACTIONS.includes(raw.action)){
     if(!AMOUNT_ACTIONS.includes(raw.action))return {t:'action',action:raw.action};
     const amount=Number(raw.amount);

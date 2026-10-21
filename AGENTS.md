@@ -35,7 +35,10 @@
 ### 多裝置房間（用代碼加入）— 已可使用
 使用者已決定：
 - 連線用 **WebRTC 點對點（PeerJS）**，房主瀏覽器是唯一權威主機，可部署在 GitHub Pages。
-- **每台裝置只控制自己認領的玩家**；沒人認領的座位由房主操作。
+- **每台裝置只控制自己認領的玩家**。
+- （2026-10-21 改）**每位玩家都要有一台裝置入座才能開始**，房主也只是其中一位玩家；原本「沒人認領的座位由房主操作」已取消，沒有裝置的人改用單機模式。
+- （2026-10-21）**座位確認後鎖定**，裝置不能自己換位子或離開座位；選錯由房主按「收回」（`releaseSeat`）。
+- （2026-10-21，與其他人討論後）**房間模式下玩家區只顯示自己的完整資料**，其他玩家只出現在「淨資產排行」（名次、玩家、公司、淨資產）。單機模式照舊顯示全部。只是不顯示，資料仍會傳到每台裝置。棋盤中央和回合面板仍會顯示目前回合玩家的內容（使用者沒有要求隱藏）。
 
 第一段（commit `61375c7`）：
 - `room.js`：`makeRoomCode`（5 碼，排除 0/O/1/I）、`normalizeRoomCode`、`roomPeerId`（前綴 `econboard-v1-`）、`seatController`、`canAct`、`claimSeat`、`releaseSeat`、`releaseClient`、`parseGuestMessage`（訪客訊息白名單：`hello`／`claim`／`release`／`action`，數量必須是有限數字）。`room.test.js` 有 7 個測試。
@@ -72,6 +75,31 @@
 - `app.js`：房主的 peer 曾經 `open` 之後（`opened`），`error` 一律忽略，交給 `disconnected` 處理 → `hostSignalLost()`：`room.offline=true`、提示「房間暫時離線」、狀態文字變琥珀色、頂端標籤顯示「暫時離線」，每 `SIGNAL_RETRY_MS=5000` 用同一個 ID `reconnect()`（`scheduleSignalRetry`／`retrySignal`）。重新 `open` 時提示「房間恢復連線」。訪客的 `disconnected` 也改成間隔重試。頁面回到前景（`visibilitychange`）或網路恢復（`online`）時立刻重試。
 - 訪客「找不到這個房間」改成 `ROOM_NOT_FOUND`，說明房主頁面要開在最前面、重新整理會換代碼。
 - 驗證：用 npm 的 `peerjs@1.5.4`（與線上同一個檔案）加本機 PeerServer（`peer@1.0.2`，綁 127.0.0.1:9000），在 Chromium 實際連線後停掉、重啟伺服器。舊版 2/9 通過（房間被拆掉、訪客斷線、恢復後代碼失效）；新版 9/9：伺服器停 20 秒房主保留房間和代碼、已加入的訪客不斷線、房主和訪客各只重試 4 次、伺服器回來 5 秒內恢復同一代碼、新裝置可用同一代碼加入、找不到房間的訊息正確。另外 3 個情境：伺服器仍佔著舊 ID 時房主維持離線不換代碼、ID 釋出後拿回同一代碼、`visibilitychange` 立刻重連（24 ms）。第三段的 8 個逾時情境仍全數通過，28 個單元測試通過，375px 無橫向溢出。腳本需要 Playwright 和網路下載套件，沒有放進 repo。
+
+第五段（座位鎖定、全員入座、只看自己的資料，使用者說「做」）：
+- `room.js`：移除 `seatController`、`releaseClient`；新增 `emptySeats(seats, playerIds)`。`canAct(seats, game, clientId)`（不再傳房主 ID）在還有空位時一律回傳 `false`。`claimSeat` 在裝置已經有座位時丟出「你已經選好座位了…」。`parseGuestMessage` 不再接受 `release`。新增 `netWorthRanking(game)`（由高到低，同分同名次），淨資產只在這裡算給排行用。
+- `app.js`：`mySeat()`／`missingSeats()`；`claimSeatHere` 先 `confirm`；座位清單在房主端對所有已入座的座位顯示「收回」，訪客自己的座位顯示「已鎖定」，已入座的裝置看不到其他「坐這裡」。`promptSeat()`（在 `renderRoom` 開頭）每個 `gameId` 對沒座位的裝置自動打開座位清單一次。`turnWho()` 讓「輪到你」只對可操作的裝置顯示，其他人看到「輪到「玩家 1」」；`roomTurnNote()` 顯示「等待入座：還差…」或「現在輪到…，你是…」。`renderPlayers` 在房間模式只畫自己的卡（`.mine`、「你」標記）加 `rankingMarkup()`。頂端標籤：訪客顯示「你：玩家 2」或「還沒選座位」。
+- `index.html`：訪客等待畫面文字改成「會跳出座位清單」。`styles.css`：`.net-ranking`、`.you-badge`、`.room-seat-locked`。
+- 驗證：30 個單元測試（`room.test.js` 改寫座位測試並加排行測試）。Chromium＋真的 PeerJS＋本機 PeerServer 13 個情境全過：房主開局後訪客和房主都自動跳出座位清單；有空位時房主強制按拉霸也被擋並提示還差誰；入座後鎖定；改過程式的訪客送 `claim` 另一個空位或 `release` 都被房主拒絕；訪客畫面寫「輪到「玩家 1」」；坐滿後輪到的人能拉霸；房主和訪客都只看到自己的卡和兩人排行；不開房間時照舊。390／1000／1500px 版面正常、無橫向溢出。第三、四段的 8＋9＋3 個連線情境重跑仍全過。
+
+### 併吞／競標系統（其他人開發中）— 整合約定
+使用者決定（2026-10-21）：**我們先把房間這邊做好並合併，再請對方把併吞系統接上來**。對方說會做成模組，不影響我們的合併。以下是接上時要注意的地方，給對方和下一個接手的人：
+
+模組怎麼放才不會把遊戲弄壞：
+- `index.html` 只載入 `game.js`，它由 `build.mjs` 把 `data.js`、`engine.js`、`sync.js`、`room.js`、`app.js` 依序接成一個檔。新模組要加進 `build.mjs` 的清單（用到引擎就放在 `engine.js` 後、`app.js` 前），只能用 `export function`／`export const` 和單行 `import … from './x.js'`。
+- 所有檔案接起來後共用同一個範圍，頂層名稱不能和現有的重複（例如 `role`、`colors`、`money`、`state`），否則整個遊戲出錯打不開。建議一律加前綴，例如 `merger…`。
+- 規則寫成只讀寫 `state` 的純函式（像 `engine.js` 的 `issueLoan(state, playerId, amount)`，不合法時 `throw Error('中文訊息')`），並在測試檔加測試。不要碰 DOM 或網路。房間裡只有房主執行規則，再把整份 `state` 廣播出去，所以純函式就會自動同步。`importGame` 只檢查基本欄位，新增欄位不會被擋。
+
+接上時房間這邊要改的地方（等對方告訴我們名稱後由我們改）：
+- **新動作**：加在 `app.js` 的 `applyAction`，並加進 `room.js` 的 `GUEST_ACTIONS`（有數量就也加進 `AMOUNT_ACTIONS`）。`parseGuestMessage` 目前只放行 `action` 和 `amount`；如果出價還要帶「哪家公司」等參數，要在這裡加驗證。
+- **誰可以出價**：`canAct` 只允許坐在目前回合玩家的裝置。競標時其他人也要能出價，需要新的權限規則（例如競標階段裡，坐在未出局玩家、且不是被賣公司的裝置可以出價）。房主端的 `room.queue` 會把同時到達的出價逐一處理，引擎只要逐筆檢查即可。
+- **淨資產**：目前一位玩家只有一個 `roleId`，淨資產在 `engine.js` 的 `endTurn`（破產、勝利判定）、`app.js` 的 `renderGoals`、`renderPlayers`，以及 `room.js` 的 `netWorthRanking` 用 `companyPosition(state, roleId)` 算。如果併吞後一位玩家可以擁有多家公司，這幾處要改成同一個函式（建議引擎加 `playerNetWorth(state, player)`），排行再改用它。
+- **出局的玩家**：要有一個欄位標示（名稱待對方定）。`endTurn` 的輪流順序要跳過他；`emptySeats`／`canAct` 也要排除他，否則遊戲會一直等他的空位。他的裝置變成只能觀看。
+
+中途有人要離開，討論過的三種做法：
+- A. 換人接手：房主按「收回」，另一台裝置坐下接著玩，遊戲在等待期間暫停。**已經可以用。**
+- B. 退出：玩家不再輪到、不參與勝負，公司像沒人選的企業一樣每季照樣結算（引擎本來就會結算全部十家公司）。尚未做。
+- C. 競標併吞：由其他人開發。還沒定案的規則：底價怎麼算、輪流喊價或暗標、得標款付給誰（離開的人已不在，例如付給銀行）、併吞後是同時經營兩家公司還是只把淨資產併進來、勝利條件要不要調整。
 
 尚未做／已知限制（下一步可考慮，修改前要先問使用者）：
 - **使用者決定不使用 TURN 中繼（2026-10-21）。** 跨網路連線不保證成功，連不上時靠逾時提示引導改用手機熱點。除非使用者主動提起，不要再提議加入 TURN。
