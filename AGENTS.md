@@ -29,7 +29,7 @@
 
 ### 線上展示
 - GitHub Pages：<https://soymilk0211.github.io/bigdata-week7/>，由使用者在 GitHub 設定為「Deploy from a branch → `feature/my-improvement` / (root)」。每次 push 到這個分支都會自動重新部署（約 1～2 分鐘）。
-- `main` 沒有房間功能；如果之後改從 `main` 部署，要先把功能合併進去（合併前要問使用者）。
+- 2026-10-21 使用者同意把 `feature/my-improvement` 合併進 `main`（快轉，兩者內容相同）。GitHub Pages 仍從 `feature/my-improvement` 部署；之後新功能先在功能分支完成，合併進 `main` 前要問使用者。
 - 這台電腦沒有 `gh`，內建瀏覽器也沒登入 GitHub；Repo 設定只能請使用者自己改。
 
 ### 多裝置房間（用代碼加入）— 已可使用
