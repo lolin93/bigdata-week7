@@ -2,7 +2,7 @@
 
 ## 專案目的
 
-維持「經濟棋局」原有的多人財經桌遊玩法，透過小步驟完成課堂指定的兩項改良。
+維持「經濟棋局」原有的多人財經桌遊玩法，以小步驟加入新功能。目前的功能是「多裝置房間」：不同裝置用代碼加入同一局（見下方「目前進度」）。
 
 ## 專案結構
 
@@ -27,28 +27,30 @@
 
 ## 目前進度（2026-10-21）
 
-### 分支狀態
-- 目前分支 `feature/my-improvement`。早先的兩項課堂改良（歷史 CSV 匯出 `c512663`、結束時淨資產排名 `46c52cc`）**不在這個分支的歷史上**，只留在標籤 `backup-csv-ranking`。要不要救回來，請先問使用者。
-
-### 進行中：多裝置房間（用代碼加入）
+### 多裝置房間（用代碼加入）— 已可使用
 使用者已決定：
 - 連線用 **WebRTC 點對點（PeerJS）**，房主瀏覽器是唯一權威主機，可部署在 GitHub Pages。
 - **每台裝置只控制自己認領的玩家**；沒人認領的座位由房主操作。
 
-已完成（第一段）：
-- `room.js`：`makeRoomCode`（5 碼，排除 0/O/1/I）、`normalizeRoomCode`、`roomPeerId`（前綴 `econboard-v1-`）、`seatController`、`canAct`、`claimSeat`、`releaseSeat`、`releaseClient`、`parseGuestMessage`（訪客訊息白名單：`hello`／`claim`／`release`／`action`，數量必須是有限數字）。
-- `room.test.js`：7 個測試；全部 28 個測試通過。
-- `app.js`：`run()` 改為回傳錯誤訊息字串（成功時回傳 `null`），讓房主之後能把錯誤回報給訪客。目前其他呼叫端都忽略回傳值，行為不變。
-- `build.mjs` 已把 `room.js` 加入合併清單，`game.js` 已重新產生。
+第一段（commit `61375c7`）：
+- `room.js`：`makeRoomCode`（5 碼，排除 0/O/1/I）、`normalizeRoomCode`、`roomPeerId`（前綴 `econboard-v1-`）、`seatController`、`canAct`、`claimSeat`、`releaseSeat`、`releaseClient`、`parseGuestMessage`（訪客訊息白名單：`hello`／`claim`／`release`／`action`，數量必須是有限數字）。`room.test.js` 有 7 個測試。
+- `run()` 改為回傳錯誤訊息字串（成功時回傳 `null`）。
 
-下一步（尚未開始）：
-1. 動態載入 PeerJS：`https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js`，SRI 為 `sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR`（已實際下載計算）。只在使用房間時才載入，單機遊玩不依賴網路。
-2. `app.js` 加入 `room` 狀態（`role: host|guest|null`、`code`、`peer`、連線清單、`seats`、`hostClientId`）。`clientId` 存在 `sessionStorage`，讓重新整理後能拿回座位。
-3. 把 `#game` 點擊處理裡的動作邏輯抽成 `applyAction(action, amount, remote)`，本機點擊和遠端訊息共用。遠端動作不受本機「卡片未關閉」(`currentCard()`) 限制，只檢查 `phase==='draw'`。
-4. 房主：`save()` 之後廣播 `{t:'state', game: JSON 字串（log 只留 60 筆）, seats, online, hostClientId}`；收到 `hello` 時回傳並標記 `welcome:true`。遠端動作要排進佇列逐一處理，並在**執行當下**才用 `canAct` 檢查（避免連點「交給下一位」跳過別人）。`gameId` 改變時清空座位。
-5. 訪客：絕不寫 `localStorage`、不回應 `storage`／`BroadcastChannel`／focus 同步；收到 `welcome` 先把 `state` 設為 `null` 再採用房主狀態；斷線每 3 秒重連，最多 15 次。離開房間以重新載入頁面（去掉 `?room=`）回到本機對局。
-6. 介面：頂端加「多裝置房間」按鈕與狀態標籤、房間對話框（建立／輸入代碼加入／座位清單：認領、離開、房主可收回）。支援 `?room=代碼` 連結自動帶入代碼。不是自己回合時停用 `#turn-content` 的按鈕和抽卡牌堆，並顯示「等待 X 操作」；訪客隱藏匯出、匯入、新遊戲、開啟同步頁籤。保留手機寬度可用。
-7. 驗證：在瀏覽器開兩個頁籤，一個建房、一個用代碼加入，走完一回合；再更新 README 的限制說明。
+第二段（連線與畫面）：
+- PeerJS 只在使用房間時動態載入：`https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js`，SRI `sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR`。單機遊玩不依賴網路。
+- `app.js` 的程式位置：`room` 狀態物件與 `clientId`（存在 `sessionStorage`）在檔案上方；連線程式在 `applyAction` 之後（`createRoom`／`openHostPeer`／`acceptGuest`／`onGuestMessage`／`joinRoom`／`connectToHost`／`onHostMessage`／座位操作／`renderRoom`）。
+- 動作邏輯抽成 `applyAction(action, amount, remote)`，本機點擊和遠端訊息共用。遠端動作只檢查 `phase==='draw'`，不受房主本機「卡片未關閉」限制。
+- 房主：`save()` 和 `adoptShared()` 結尾呼叫 `broadcastRoom()`，送出 `{t:'state', game: JSON 字串（log 只留 60 筆）, seats, online, hostClientId}`；回應 `hello` 時加上 `welcome:true`。遠端動作排進 `room.queue` 逐一處理，並在執行當下才用 `canAct` 檢查。`gameId` 改變時清空座位。關閉房間或關閉頁面時送 `{t:'closed'}`。
+- 訪客：`save()` 不寫 `localStorage`，不回應 `storage`／`BroadcastChannel`／focus 同步；收到 `welcome` 先清掉本機 `state` 再採用房主狀態；斷線每 3 秒重連，最多 15 次。離開房間會重新載入頁面（去掉 `?room=`），回到本機對局。
+- 畫面：頂端「多裝置房間」按鈕與狀態標籤（`#room-chip`）、房間對話框（`#room-modal`）、訪客等待開局畫面（`#room-wait`）。`renderBoard`／`renderTurn` 變成包裝函式，內容在 `renderBoardContent`／`renderTurnContent`，再由 `gateTurnControls()` 停用不是自己回合的按鈕並顯示提示。`host-only` 類別的按鈕在訪客端隱藏。支援 `?room=代碼` 邀請連結。
+
+已驗證（瀏覽器兩個頁籤，經 PeerJS 公用伺服器實際連線）：建立房間 → 邀請連結加入 → 未選座位時無法操作 → 認領座位後拉霸、抽卡、聘僱、交棒並結算一季 → 連送兩次「交給下一位」第二次被擋 → 訪客重新整理後座位保留 → 房主關閉房間後訪客收到通知。375px 手機寬度無橫向溢出。28 個單元測試通過。
+
+尚未做／已知限制（下一步可考慮）：
+- 只用過同一台電腦的兩個頁籤測試，還沒在兩台實體裝置、不同網路下測試。
+- 沒有 TURN 伺服器；對稱型 NAT（部分學校或公司網路）可能連不上。
+- 房主重新整理頁面會換一個新代碼，訪客要重新加入；房主的座位分配只存在記憶體。
+- 房主端的 `applyAction`／連線流程沒有自動化測試（需要瀏覽器與網路），目前靠手動兩頁籤驗證。
 
 ## 交付規則
 

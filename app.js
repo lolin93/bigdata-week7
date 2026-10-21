@@ -1,6 +1,7 @@
 import {ROLES,METRICS,METRIC_LABELS,GLOBAL_EVENTS,PERSONAL_EVENTS,SECTOR_EVENTS,ALL_EVENTS,FED_RULES,BOARD} from './data.js';
 import {createGame,rollDice,drawEvent,movementPath,endTurn,adjustStaff,issueLoan,repayLoan,updateBadLoans,financials,companyPosition,effectBreakdown,eventRemaining,makeSnapshot,getEconomicSnapshot,getFedRuleEvaluations,getFedDecision,exportGame,importGame} from './engine.js';
 import {syncInfo,isNewerGame} from './sync.js';
+import {makeRoomCode,normalizeRoomCode,roomPeerId,seatController,canAct,claimSeat,releaseSeat,releaseClient,parseGuestMessage} from './room.js';
 
 const $=s=>document.querySelector(s),h=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>Math.round(n).toLocaleString('zh-TW'),decimal=(n,d=1)=>n===null||n===undefined?'—（資料不足）':Number(n).toFixed(d),signed=n=>`${n>=0?'+':'−'}${money(Math.abs(n))}`;
@@ -48,6 +49,9 @@ const strikeStories={
 const storageKey='economy-board-v1';
 const viewKey='economy-board-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
+const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
+// Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
+const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
 let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
@@ -63,13 +67,14 @@ function prepareNewSession(game){const previous=syncInfo(state);game.sync={gameI
 function readStored(){try{const raw=localStorage.getItem(storageKey);return raw?importGame(raw):null}catch{return undefined}}
 function cancelAnimation(){animationSerial++;animation=null}
 function save(){
-  if(!state)return;
+  if(!state||isGuest())return;
   if(!state.sync)prepareNewSession(state);
   state.sync.revision++;
   state.sync.updatedAt=Math.max(Date.now(),state.sync.updatedAt+1);
   state.sync.writerId=tabId;
   try{localStorage.setItem(storageKey,exportGame(state));$('#save-status').textContent='多頁籤已同步'}catch{$('#save-status').textContent=channel?'即時同步中；請匯出備份':'本機儲存不可用，請匯出備份'}
   try{channel?.postMessage({type:'state',writerId:tabId,game:state})}catch{}
+  broadcastRoom();
 }
 function clearSave(){
   const updatedAt=Math.max(Date.now(),(syncInfo(state)?.updatedAt||0)+1,resetAt+1);
@@ -85,6 +90,7 @@ function adoptShared(incoming){
   cancelAnimation();state=incoming;render();
   $('#save-status').textContent='已從其他頁籤同步';
   if(sharedRoll)beginRollAnimation({playerId:incoming.players[incoming.turnIndex].id,from,dice:incoming.dice,reels:incoming.reels},false);
+  broadcastRoom();
   return true;
 }
 function ensureFresh(){
@@ -181,7 +187,20 @@ function slotMarkup(values){
     return `<span class="slot-reel ${animation?.stage==='rolling'&&animation.spinning[i]?'spinning':''}" aria-label="第 ${i+1} 個轉輪：${value}"><span class="slot-strip" style="transform:translateY(-${position*100}%)">${cells}</span></span>`;
   }).join('')}</div>`;
 }
-function renderBoard(){
+// In a room only the device that controls the current player may press the draw deck or turn buttons.
+function renderBoard(){renderBoardContent();if(room.role&&state?.status==='playing'&&!iCanAct())$('#board [data-action="draw-card"]')?.setAttribute('disabled','')}
+function renderTurn(){renderTurnContent();gateTurnControls()}
+function gateTurnControls(){
+  if(!room.role||!state)return;
+  const playing=state.status==='playing';
+  if(playing?iCanAct():!isGuest())return;
+  document.querySelectorAll('#turn-content button,#turn-content input').forEach(x=>{x.disabled=true});
+  if(!playing)return;
+  const p=currentPlayer(),who=seatController(room.seats,roomHostId(),p.id)===roomHostId()?'房主':'另一台裝置';
+  const seated=isHost()||Object.values(room.seats).includes(clientId);
+  $('#turn-content').insertAdjacentHTML('beforeend',`<p class="room-wait-note">現在由${who}操作「${h(p.name)}」${seated?'，輪到你的玩家時才能操作。':'。按右上角「多裝置房間」選一個座位，就能操作自己的玩家。'}</p>`);
+}
+function renderBoardContent(){
   const pos=state.players.map(p=>({p,index:animation?.playerId===p.id?animation.position:p.position}));
   const tiles=BOARD.map((tile,i)=>{
     const [row,col]=boardCoords(i);
@@ -216,7 +235,7 @@ function renderBoard(){
   }
 }
 function actionRow(id,buttons,min=1){return `<div class="action-row"><input id="${id}" type="number" min="${min}" step="1" value="${id==='staff-count'?10:100}" aria-label="${id==='staff-count'?'人數':'金額'}">${buttons.map(([label,action])=>`<button type="button" data-action="${action}">${label}</button>`).join('')}</div>`}
-function renderTurn(){
+function renderTurnContent(){
   const p=currentPlayer(),r=role(p.roleId),done=state.phase==='manage',finished=state.status!=='playing';
   if(animation){$('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="done"></span><span></span></div><p class="turn-meta">${animation.stage==='rolling'?'兩個數字正在跳動…':animation.stage==='result'?'結果已停定，稍後開始移動。':animation.dice===0?'拉出 0 + 0 = 0，棋子停留原地。':`拉出 ${animation.reels.join(' + ')} = ${animation.dice}，棋子每秒前進一格。`}</p><button class="primary" disabled>請稍候…</button>`;return}
   if(finished){
@@ -301,7 +320,9 @@ function renderFed(){
 function chart(data,key,title,color){if(!data.length)return `<div class="empty-state">${title}：等待第一季結算。</div>`;const values=data.map(x=>x[key]).filter(Number.isFinite),min=Math.min(...values),max=Math.max(...values),span=max-min||1;const points=data.map((s,i)=>`${35+(i/(Math.max(data.length-1,1)))*660},${165-((s[key]-min)/span)*125}`).join(' ');return `<div class="history-chart"><h3>${title}</h3><svg viewBox="0 0 730 190" role="img" aria-label="${title}歷史折線圖"><line x1="30" y1="165" x2="700" y2="165" stroke="#dfe8e3"/><polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${data.map((s,i)=>{const x=35+(i/Math.max(data.length-1,1))*660,y=165-((s[key]-min)/span)*125;return `<circle cx="${x}" cy="${y}" r="4" fill="${color}"><title>第 ${s.round} 季：${decimal(s[key],1)}</title></circle><text x="${x}" y="185" text-anchor="middle" font-size="10" fill="#899b93">${s.round}</text>`}).join('')}</svg><div class="chart-legend"><span><i style="background:${color}"></i>${title} · 依已結算快照</span></div></div>`}
 function renderHistory(){const data=state.economicHistory;$('#history-body').innerHTML=`<div class="history-layout"><div>${chart(data,'revenueTotal','全市場營收', '#0e9186')}${chart(data,'stockIndex','股市指數', '#597bae')}</div><div><div class="history-chart"><h3>各季數據</h3>${data.length?`<div style="overflow:auto"><table class="history-table"><thead><tr><th>季數</th><th>通膨</th><th>成長</th><th>失業</th><th>利率</th></tr></thead><tbody>${data.slice().reverse().map(s=>`<tr><td>${s.round}</td><td>${decimal(s.inflationPct,1)}%</td><td>${s.growthPct===null?'—':decimal(s.growthPct,1)+'%'}</td><td>${decimal(s.unemploymentPct,1)}%</td><td>${decimal(s.fedRatePct,2)}%</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">尚無已結算季數。</p>'}</div><div class="history-chart"><h3>遊戲動態</h3><div class="log-list">${state.log.length?state.log.slice(0,60).map(x=>`<div class="log-item">${h(x)}</div>`).join(''):'<div class="log-item">等待玩家啟動拉霸。</div>'}</div></div></div></div>`}
 function render(){
-  const onHome=page==='home';
+  const onHome=page==='home',waitingForHost=isGuest()&&!state;
+  renderRoom();
+  $('#room-wait').hidden=onHome||!waitingForHost;
   $('#round-badge').hidden=onHome||!state;
   $('#home').hidden=!onHome;
   $('#home-btn').classList.toggle('active',onHome);
@@ -311,7 +332,7 @@ function render(){
     $('#home-status').textContent=state?`已有對局 · 第 ${state.round} 季，返回後可繼續遊玩。`:'一台電腦就能開始，大家輪流操作。';
     return;
   }
-  if(!state){$('#setup').hidden=false;$('#game').hidden=true;renderSetup();return}
+  if(!state){$('#setup').hidden=waitingForHost;$('#game').hidden=true;if(!waitingForHost)renderSetup();return}
   $('#setup').hidden=true;$('#game').hidden=false;
   $('#round-number').textContent=String(state.round).padStart(2,'0');$('#round-limit').textContent=`／${state.maxRounds} 季`;
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.tab-page').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));
@@ -386,65 +407,288 @@ function beginRollAnimation({playerId,from,dice,reels,path}){
 }
 
 async function rollWithAnimation(){
-  if(animation)return;
-  let result=null,from=null,playerId=null;
+  if(animation)return BUSY_MESSAGE;
+  let result=null,from=null,playerId=null,error=null;
   try{
     await withGameLock(()=>{
-      if(!ensureFresh())return;
+      if(!ensureFresh()){error='對局已由其他頁籤更新，請確認後再操作。';return}
       const player=currentPlayer();from=player.position;playerId=player.id;
       result=rollDice(state);save();render();
     });
     if(result)beginRollAnimation({playerId,from,dice:result.dice,reels:result.reels,path:result.path});
-  }catch(e){notify(e.message||'無法啟動拉霸')}
+  }catch(e){error=e.message||'無法啟動拉霸';notify(error)}
+  return error;
 }
+const AMOUNT_INPUTS={hire:'#staff-count',layoff:'#staff-count',loan:'#loan-amount',repay:'#loan-amount','mark-bad':'#bad-amount','recover-bad':'#bad-amount'};
+// Shared by local clicks and actions a room host receives from guests; resolves to an error message or null.
+async function applyAction(action,amount,remote=false){
+  if(action==='roll')return rollWithAnimation();
+  if(animation)return BUSY_MESSAGE;
+  if(action==='draw-card')return run(()=>drawEvent(state));
+  if(state.phase==='draw')return remote?'請先抽事件卡。':null;
+  if(!remote&&currentCard())return null;
+  if(action==='end-turn')return run(()=>{const result=endTurn(state);if(result){snapshotSelection='latest';rememberView();notify(result.finished?'對局結束，請查看勝負結果。':`第 ${result.snapshot.round} 季已結算。`)}});
+  return run(()=>{const id=currentPlayer().id,n=amount;if(action==='hire')adjustStaff(state,id,n);else if(action==='layoff')adjustStaff(state,id,-n);else if(action==='loan')issueLoan(state,id,n);else if(action==='repay')repayLoan(state,id,n);else if(action==='mark-bad')updateBadLoans(state,id,n);else if(action==='recover-bad')updateBadLoans(state,id,-n)});
+}
+
+const PEERJS_URL='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',PEERJS_SRI='sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR';
+let peerLoading=null;
+// PeerJS is only fetched when a room is used, so single-device play never needs the network.
+function loadPeerJs(){
+  if(globalThis.Peer)return Promise.resolve();
+  return peerLoading||=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=PEERJS_URL;s.integrity=PEERJS_SRI;s.crossOrigin='anonymous';s.onload=()=>resolve();s.onerror=()=>{peerLoading=null;s.remove();reject(Error('無法載入連線元件，請確認網路連線。'))};document.head.appendChild(s)});
+}
+function isHost(){return room.role==='host'}
+function isGuest(){return room.role==='guest'}
+function roomHostId(){return isHost()?clientId:room.hostClientId}
+function syncSeats(){const gameId=state?syncInfo(state).gameId:null;if(room.seatsGameId!==gameId){room.seats={};room.seatsGameId=gameId}}
+function iCanAct(){if(!room.role)return true;if(isHost())syncSeats();return canAct(room.seats,roomHostId(),state,clientId)}
+function onlineClients(){return isHost()?[clientId,...[...room.guests].filter(g=>g.clientId&&g.conn.open).map(g=>g.clientId)]:room.online}
+function sendSafe(conn,message){try{if(conn?.open)conn.send(message)}catch{}}
+function roomSnapshot(welcome=false){
+  syncSeats();
+  return {t:'state',welcome,game:state?JSON.stringify({...state,log:state.log.slice(0,60)}):null,seats:room.seats,online:onlineClients(),hostClientId:clientId};
+}
+function broadcastRoom(){
+  if(!isHost())return;
+  const message=roomSnapshot();
+  for(const g of room.guests)if(g.clientId)sendSafe(g.conn,message);
+  renderRoom();
+}
+function resetRoom(extra={}){
+  const peer=room.peer;
+  clearTimeout(room.reconnectTimer);
+  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,synced:false},extra);
+  setTimeout(()=>{try{peer?.destroy()}catch{}},300);
+}
+
+async function createRoom(){
+  if(room.role)return;
+  room.error='';room.status='正在建立房間…';renderRoom();
+  try{await loadPeerJs()}catch(e){room.status='';room.error=e.message;renderRoom();return}
+  openHostPeer(0);
+}
+function openHostPeer(attempt){
+  const code=makeRoomCode(),peer=new Peer(roomPeerId(code));
+  Object.assign(room,{role:'host',code,peer,closed:false,hostClientId:clientId,status:'正在建立房間…',error:''});
+  peer.on('open',()=>{if(room.peer!==peer)return;room.status='房間已開啟，等待其他裝置加入';render()});
+  peer.on('connection',conn=>{if(room.peer===peer)acceptGuest(conn)});
+  peer.on('disconnected',()=>{if(room.peer===peer&&!peer.destroyed)try{peer.reconnect()}catch{}});
+  peer.on('error',err=>{
+    if(room.peer!==peer)return;
+    if(err.type==='unavailable-id'&&attempt<4){peer.destroy();openHostPeer(attempt+1);return}
+    if(peer.open){room.status='與配對伺服器的連線不穩；已加入的裝置仍可繼續遊玩';renderRoom();return}
+    resetRoom({error:`無法建立房間（${err.type||'未知錯誤'}），請確認網路後再試。`});render();
+  });
+  render();
+}
+function acceptGuest(conn){
+  const guest={conn,clientId:null};
+  room.guests.add(guest);
+  conn.on('data',raw=>onGuestMessage(guest,raw));
+  conn.on('close',()=>{if(room.guests.delete(guest))broadcastRoom()});
+  conn.on('error',()=>{});
+}
+function onGuestMessage(guest,raw){
+  const msg=parseGuestMessage(raw);if(!msg)return;
+  if(msg.t==='hello'){
+    for(const other of room.guests)if(other!==guest&&other.clientId===msg.clientId){room.guests.delete(other);try{other.conn.close()}catch{}}
+    const returning=Object.values(room.seats).includes(msg.clientId);
+    guest.clientId=msg.clientId;
+    sendSafe(guest.conn,roomSnapshot(true));
+    broadcastRoom();render();notify(returning?'一台裝置重新連上房間。':'有一台裝置加入房間。');
+    return;
+  }
+  if(!guest.clientId)return;
+  const reject=message=>sendSafe(guest.conn,{t:'reject',message});
+  if(msg.t==='claim'){
+    if(!state){reject('房主還沒開始對局。');return}
+    syncSeats();
+    try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),msg.playerId,guest.clientId)}catch(e){reject(e.message);return}
+    broadcastRoom();render();return;
+  }
+  if(msg.t==='release'){room.seats=releaseClient(room.seats,guest.clientId);broadcastRoom();render();return}
+  // Actions run one at a time and the turn owner is checked when each one runs, so a double-clicked
+  // "交給下一位" cannot end the next player's turn too.
+  room.queue=room.queue.then(async()=>{
+    syncSeats();
+    if(!state||!canAct(room.seats,clientId,state,guest.clientId)){reject('還沒輪到你操作。');return}
+    const error=await applyAction(msg.action,msg.amount,true);
+    if(error)reject(error);
+  }).catch(()=>{});
+}
+function closeRoom(){
+  for(const g of room.guests)sendSafe(g.conn,{t:'closed'});
+  resetRoom({closed:true});render();
+}
+
+async function joinRoom(input){
+  const code=normalizeRoomCode(input);
+  if(!code){room.error='房間代碼是 5 個英文字母或數字。';renderRoom();return}
+  if(room.role)return;
+  room.prefill=code;room.error='';room.status='正在連線…';renderRoom();
+  try{await loadPeerJs()}catch(e){room.status='';room.error=e.message;renderRoom();return}
+  const peer=new Peer();
+  Object.assign(room,{role:'guest',code,peer,closed:false,retries:0,synced:false,status:'正在連線…'});
+  peer.on('open',()=>{if(room.peer===peer)connectToHost()});
+  peer.on('disconnected',()=>{if(room.peer===peer&&!peer.destroyed)try{peer.reconnect()}catch{}});
+  peer.on('error',err=>{
+    if(room.peer!==peer)return;
+    if(room.synced){if(err.type==='peer-unavailable')scheduleReconnect();return}
+    resetRoom({error:err.type==='peer-unavailable'?'找不到這個房間，請確認代碼，或請房主先建立房間。':`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`});render();
+  });
+  render();
+}
+function connectToHost(){
+  const conn=room.peer.connect(roomPeerId(room.code),{reliable:true});
+  room.hostConn=conn;
+  conn.on('open',()=>{if(room.hostConn!==conn)return;room.retries=0;room.status='已連線';conn.send({t:'hello',clientId});renderRoom()});
+  conn.on('data',msg=>{if(room.hostConn===conn)onHostMessage(msg)});
+  conn.on('close',()=>{if(room.hostConn===conn&&isGuest()&&!room.closed)scheduleReconnect()});
+  conn.on('error',()=>{});
+}
+function scheduleReconnect(){
+  if(room.reconnectTimer||room.closed)return;
+  if(room.retries++>=15){room.status='房主已離線，房間無法使用。';renderRoom();return}
+  room.status='與房主斷線，重新連線中…';renderRoom();
+  room.reconnectTimer=setTimeout(()=>{room.reconnectTimer=null;if(isGuest()&&!room.closed&&room.peer&&!room.peer.destroyed)connectToHost()},3000);
+}
+function onHostMessage(msg){
+  if(!msg||typeof msg!=='object')return;
+  if(msg.t==='reject'){notify(String(msg.message||'房主沒有接受這個操作。').slice(0,120));return}
+  if(msg.t==='closed'){room.closed=true;room.status='房主已關閉房間';try{room.hostConn?.close()}catch{}notify('房主已關閉房間，畫面停在最後的狀態。');render();return}
+  if(msg.t!=='state')return;
+  room.seats=msg.seats&&typeof msg.seats==='object'?Object.fromEntries(Object.entries(msg.seats).filter(([,v])=>typeof v==='string')):{};
+  room.online=Array.isArray(msg.online)?msg.online.filter(x=>typeof x==='string'):[];
+  room.hostClientId=typeof msg.hostClientId==='string'?msg.hostClientId:'';
+  if(msg.welcome){room.synced=true;page='game'}
+  if(typeof msg.game!=='string'){cancelAnimation();closeCard();state=null;render();return}
+  let incoming;try{incoming=importGame(msg.game)}catch{return}
+  const before=state&&!msg.welcome?{round:state.round,status:state.status}:null;
+  if(msg.welcome){cancelAnimation();state=null}
+  if(!adoptShared(incoming)){render();return}
+  $('#save-status').textContent=`房間 ${room.code} 同步中`;
+  if(before?.status==='playing'&&incoming.status!=='playing')notify('對局結束，請查看勝負結果。');
+  else if(before&&incoming.round>before.round){snapshotSelection='latest';rememberView();notify(`第 ${before.round} 季已結算。`)}
+}
+function sendToHost(message){if(!room.hostConn?.open){notify('尚未連上房主，請稍候。');return}sendSafe(room.hostConn,message)}
+function claimSeatHere(playerId){
+  if(isGuest()){sendToHost({t:'claim',playerId});return}
+  if(!isHost()||!state)return;
+  syncSeats();
+  try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),playerId,clientId)}catch(e){notify(e.message);return}
+  broadcastRoom();render();
+}
+function releaseMySeat(){if(isGuest()){sendToHost({t:'release'});return}room.seats=releaseClient(room.seats,clientId);broadcastRoom();render()}
+function kickSeat(playerId){if(!isHost())return;room.seats=releaseSeat(room.seats,playerId);broadcastRoom();render()}
+function leaveRoom(){
+  if(isHost()){if(!confirm('關閉房間後，其他裝置會停止同步。要關閉嗎？'))return;closeRoom();notify('房間已關閉。');return}
+  if(!isGuest())return;
+  // Reloading without ?room= brings back this device's own saved game, which a guest never overwrote.
+  room.closed=true;try{room.peer?.destroy()}catch{}
+  const url=new URL(location.href);url.searchParams.delete('room');location.replace(url.href);
+}
+function roomLink(){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',room.code);return url.href}
+async function copyText(text,done){try{await navigator.clipboard.writeText(text);notify(done)}catch{notify(`無法自動複製，請手動記下：${text}`)}}
+function seatListMarkup(){
+  if(!state)return `<p class="room-note">${isHost()?'開始對局後':'房主開始對局後'}，這裡會列出每位玩家的座位。</p>`;
+  const host=roomHostId(),online=onlineClients();
+  return `<ul class="room-seats">${state.players.map(p=>{
+    const owner=room.seats[p.id],mine=owner===clientId;
+    const who=mine?'你':!owner?(isHost()?'空位 · 由你（房主）操作':'空位 · 由房主操作'):owner===host?'房主':online.includes(owner)?'另一台裝置':'離線中的裝置';
+    const button=mine?'<button type="button" class="secondary" data-room="release">離開座位</button>':!owner?`<button type="button" class="secondary" data-room="claim" data-player="${h(p.id)}">坐這裡</button>`:isHost()?`<button type="button" class="quiet" data-room="kick" data-player="${h(p.id)}">收回</button>`:'';
+    return `<li class="room-seat ${mine?'mine':''}"><span class="room-seat-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}</strong><small>${h(role(p.roleId).name)} · ${who}</small></div>${button}</li>`;
+  }).join('')}</ul>`;
+}
+function roomBodyMarkup(){
+  const status=room.status?`<p class="room-status" role="status">${h(room.status)}</p>`:'';
+  const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
+  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section"><h3>座位</h3><p class="room-note">每台裝置認領一位玩家；沒人坐的座位由這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
+  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section"><h3>選擇你的座位</h3><p class="room-note">坐下後，輪到這位玩家時就由你這台裝置操作。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
+  const typed=$('#room-code-input')?.value??room.prefill??'';
+  const fileWarning=location.protocol==='file:'?'<p class="form-error">目前是直接開啟檔案。其他裝置需要用網址（例如 GitHub Pages）開啟同一個遊戲才能加入。</p>':'';
+  return `<p class="eyebrow">MULTI-DEVICE ROOM</p><h2 id="room-title">多裝置房間</h2><p class="room-lead">一台裝置建立房間，其他裝置輸入代碼加入；每台裝置只操作自己認領的玩家。</p>${fileWarning}<section class="room-section"><h3>建立房間</h3><p class="room-note">這台裝置會當主機並保存對局，遊戲期間請保持這個頁面開著。</p><button type="button" class="primary" data-room="create">建立房間</button></section><section class="room-section"><h3>加入房間</h3><div class="room-join"><input id="room-code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="例如 K7P2Q" aria-label="房間代碼" value="${h(typed)}"><button type="button" class="secondary" data-room="join">加入</button></div><p class="room-note">加入後會顯示房主的對局；離開房間就回到這台裝置原本的對局。</p></section>${error}${status}`;
+}
+function renderRoom(){
+  const chip=$('#room-chip');
+  chip.hidden=!room.role;
+  if(room.role)chip.textContent=isHost()?`房間 ${room.code} · ${onlineClients().length} 台裝置`:`房間 ${room.code} · ${room.status}`;
+  $('#room-btn').classList.toggle('active',!!room.role);
+  document.body.classList.toggle('room-guest',isGuest());
+  if(!$('#room-modal').hidden)$('#room-body').innerHTML=roomBodyMarkup();
+}
+function openRoomModal(){$('#room-modal').hidden=false;renderRoom();$('#room-code-input')?.focus()}
+function closeRoomModal(){$('#room-modal').hidden=true}
 
 $('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id});renderSetup()}});
 $('#setup-players').addEventListener('input',e=>{if(e.target.dataset.setupName!==undefined)setupPlayers[Number(e.target.dataset.setupName)].name=e.target.value});
 $('#setup-players').addEventListener('change',e=>{if(e.target.dataset.setupRole!==undefined)setupPlayers[Number(e.target.dataset.setupRole)].roleId=e.target.value});
 $('#setup-players').addEventListener('click',e=>{const i=e.target.dataset.removePlayer;if(i!==undefined&&setupPlayers.length>2){setupPlayers.splice(Number(i),1);renderSetup()}});
-$('#start-btn').addEventListener('click',async()=>{try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
+$('#start-btn').addEventListener('click',async()=>{if(isGuest())return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
 $('.tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;rememberView();render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#snapshot-select').addEventListener('change',e=>{snapshotSelection=e.target.value;rememberView();renderDashboard()});
 $('#game').addEventListener('click',e=>{
   const a=e.target.closest('[data-action]');if(!a||!state)return;
-  const action=a.dataset.action,p=currentPlayer();
+  const action=a.dataset.action;
   if(action==='new-game'){void resetGame();return}
-  if(action==='roll'){void rollWithAnimation();return}
-  if(animation)return;
-  if(action==='draw-card'){void run(()=>drawEvent(state));return}
-  if(action==='dismiss-card'){dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();return}
-  if(state.phase==='draw'||currentCard())return;
-  if(action==='end-turn'){run(()=>{const result=endTurn(state);if(result){snapshotSelection='latest';rememberView();notify(result.finished?'對局結束，請查看勝負結果。':`第 ${result.snapshot.round} 季已結算。`)}});return}
-  const numberId=['hire','layoff'].includes(action)?'#staff-count':['loan','repay'].includes(action)?'#loan-amount':'#bad-amount';
-  const n=Number($(numberId)?.value);
-  run(()=>{if(action==='hire')adjustStaff(state,p.id,n);else if(action==='layoff')adjustStaff(state,p.id,-n);else if(action==='loan')issueLoan(state,p.id,n);else if(action==='repay')repayLoan(state,p.id,n);else if(action==='mark-bad')updateBadLoans(state,p.id,n);else if(action==='recover-bad')updateBadLoans(state,p.id,-n)});
+  if(action==='dismiss-card'){if(animation)return;dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();return}
+  if(!iCanAct()){notify('還沒輪到你，請等待目前的玩家操作。');return}
+  const amount=AMOUNT_INPUTS[action]?Number($(AMOUNT_INPUTS[action])?.value):undefined;
+  if(isGuest()){
+    if(animation)return;
+    if(state.phase==='draw'&&action!=='draw-card'&&action!=='roll')return;
+    if(action!=='roll'&&action!=='draw-card'&&currentCard())return;
+    sendToHost({t:'action',action,amount});return;
+  }
+  void applyAction(action,amount);
 });
 document.querySelectorAll('[data-close-modal]').forEach(x=>x.addEventListener('click',closeCard));
 twoColumnPlayerCards.addEventListener('change',()=>{if(state&&page==='game'&&tab==='business')renderPlayers()});
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeCard()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeCard();closeRoomModal()}});
+$('#room-btn').addEventListener('click',openRoomModal);
+$('#room-chip').addEventListener('click',openRoomModal);
+$('#room-modal').addEventListener('click',e=>{
+  if(e.target.closest('[data-close-room]')){closeRoomModal();return}
+  const b=e.target.closest('[data-room]');if(!b)return;
+  const what=b.dataset.room;
+  if(what==='create')void createRoom();
+  else if(what==='join')void joinRoom($('#room-code-input')?.value);
+  else if(what==='copy-code')void copyText(room.code,'已複製房間代碼。');
+  else if(what==='copy-link')void copyText(roomLink(),'已複製邀請連結。');
+  else if(what==='claim')claimSeatHere(b.dataset.player);
+  else if(what==='release')releaseMySeat();
+  else if(what==='kick')kickSeat(b.dataset.player);
+  else if(what==='leave')leaveRoom();
+});
+$('#room-modal').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='room-code-input')void joinRoom(e.target.value)});
+window.addEventListener('pagehide',()=>{if(isHost())for(const g of room.guests)sendSafe(g.conn,{t:'closed'})});
 async function resetGame(){
-  if(state&&!confirm('確定開始新遊戲？所有已開啟的頁籤都會返回設定畫面，建議先匯出備份。'))return;
+  if(isGuest()){notify('只有房主可以開始新遊戲。');return}
+  if(state&&!confirm(`確定開始新遊戲？所有已開啟的頁籤${isHost()?'與房間裡的裝置':''}都會返回設定畫面，建議先匯出備份。`))return;
   await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;clearSave();cancelAnimation();closeCard();state=null;page='game';tab='business';rememberView();render()});
+  broadcastRoom();
 }
 $('#home-btn').addEventListener('click',()=>{page='home';closeCard();render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#home-play-btn').addEventListener('click',()=>{page='game';render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#new-game-btn').addEventListener('click',()=>{void resetGame()});
 $('#open-tab-btn').addEventListener('click',()=>{window.open(location.href,'_blank','noopener')});
 $('#export-btn').addEventListener('click',()=>{if(!state){notify('目前沒有可匯出的對局。');return}const blob=new Blob([exportGame(state)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`經濟棋局-第${state.round}季.json`;a.click();URL.revokeObjectURL(url)});
-$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{const imported=importGame(await file.text());await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='business';snapshotSelection='latest';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
+$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;if(isGuest()){notify('只有房主可以匯入存檔。');e.target.value='';return}try{const imported=importGame(await file.text());await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='business';snapshotSelection='latest';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
 window.addEventListener('storage',e=>{
-  if(e.key!==storageKey)return;
+  if(e.key!==storageKey||isGuest())return;
   if(e.newValue){try{adoptShared(importGame(e.newValue))}catch{}}
   else{const saved=readStored();if(saved)adoptShared(saved);else if(saved===null){resetAt=Math.max(resetAt,Date.now());cancelAnimation();closeCard();state=null;render()}}
 });
 if(channel)channel.onmessage=e=>{
-  const message=e.data;if(!message||message.writerId===tabId)return;
+  const message=e.data;if(!message||message.writerId===tabId||isGuest())return;
   if(message.type==='state'){try{adoptShared(importGame(JSON.stringify(message.game)))}catch{}}
   if(message.type==='reset'&&(!state||message.updatedAt>=syncInfo(state).updatedAt)){resetAt=Math.max(resetAt,message.updatedAt);cancelAnimation();closeCard();state=null;render()}
 };
-function syncOnFocus(){const saved=readStored();if(saved)adoptShared(saved);else if(saved===null&&state){cancelAnimation();closeCard();state=null;render()}}
+function syncOnFocus(){if(isGuest())return;const saved=readStored();if(saved)adoptShared(saved);else if(saved===null&&state){cancelAnimation();closeCard();state=null;render()}}
 window.addEventListener('focus',syncOnFocus);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncOnFocus()});
 const savedAtStart=readStored();if(savedAtStart){state=savedAtStart;snapshotSelection='latest'}
+const invitedRoom=normalizeRoomCode(new URLSearchParams(location.search).get('room'));
+if(invitedRoom){room.prefill=invitedRoom;$('#room-modal').hidden=false}
 renderHomeRoles();
 render();
