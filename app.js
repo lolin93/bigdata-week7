@@ -131,7 +131,18 @@ function renderHomeRoles(){
 function renderSetup(){
   $('#setup-players').innerHTML=setupPlayers.map((p,i)=>`<div class="setup-player"><span class="player-numeral">${i+1}</span><input data-setup-name="${i}" aria-label="玩家 ${i+1} 名稱" maxlength="16" value="${h(p.name)}"><select data-setup-role="${i}" aria-label="玩家 ${i+1} 企業">${ROLES.map(r=>`<option value="${r.id}" ${r.id===p.roleId?'selected':''}>${h(r.name)}</option>`).join('')}</select><button class="remove-player" data-remove-player="${i}" type="button" aria-label="移除玩家 ${i+1}" ${setupPlayers.length<=2?'disabled':''}>×</button></div>`).join('');
   $('#add-player').disabled=setupPlayers.length>=8;
+  renderSetupRoomHint();
 }
+// While a host waits in a room, the setup screen shows how many devices are in so the player count can match them.
+function renderSetupRoomHint(){
+  const el=$('#setup-room-hint');
+  el.hidden=!isHost();
+  if(!isHost())return;
+  const devices=onlineClients().length,target=Math.min(8,Math.max(2,devices));
+  const action=devices<2?'等其他人用邀請連結加入。':setupPlayers.length===target?(devices>8?'玩家最多 8 位，多出來的裝置只能觀看。':'目前人數剛好。'):`<button type="button" class="secondary" data-match-devices="${target}">改成 ${target} 位玩家</button>`;
+  el.innerHTML=`房間裡目前有 <strong>${devices}</strong> 台裝置（含你）。每位玩家都要有一台裝置坐下才能開始，玩家數要和裝置數一樣。${action}`;
+}
+function addSetupPlayer(){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id})}
 function currentPlayer(){return state?.players[state.turnIndex]}
 function boardCoords(i){if(i<=6)return [1,i+1];if(i<=12)return [i-5,7];if(i<=18)return [7,19-i];return [25-i,1]}
 function sectorForTile(i){const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];return sectors[((Math.floor((i-3)/3)%6)+6)%6]}
@@ -652,7 +663,9 @@ function leaveRoom(){
 function roomLink(){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',room.code);return url.href}
 async function copyText(text,done){try{await navigator.clipboard.writeText(text);notify(done)}catch{notify(`無法自動複製，請手動記下：${text}`)}}
 function seatListMarkup(){
-  if(!state)return `<p class="room-note">${isHost()?'開始對局後':'房主開始對局後'}，這裡會列出每位玩家的座位。</p>`;
+  if(!state)return isHost()
+    ?`<ol class="room-steps"><li>按上面的「複製邀請連結」傳給大家。</li><li>等人到齊：目前 <strong>${onlineClients().length}</strong> 台裝置（含你）。</li><li>關掉這個視窗，按「設定玩家，開始遊戲 →」，玩家數設成和裝置數一樣再開始。</li><li>開始後每個人（包括你）都會跳出座位清單，各選一位。</li></ol>`
+    :'<ol class="room-steps"><li>等房主設定玩家、開始遊戲。</li><li>開始後會跳出座位清單：找到自己的名字按「坐這裡」並確認，確認後不能自己換。</li><li>輪到你的玩家時才能操作。</li></ol>';
   const host=roomHostId(),online=onlineClients(),seated=!!mySeat();
   return `<ul class="room-seats">${state.players.map(p=>{
     const owner=room.seats[p.id],mine=owner===clientId;
@@ -662,11 +675,17 @@ function seatListMarkup(){
     return `<li class="room-seat ${mine?'mine':''}"><span class="room-seat-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}</strong><small>${h(role(p.roleId).name)} · ${who}</small></div>${button}</li>`;
   }).join('')}</ul>`;
 }
+// Tells a host whose game has more players than devices why play is waiting and how to fix the count.
+function seatCountHint(){
+  if(state.status!=='playing'||!missingSeats().length)return '';
+  const devices=onlineClients().length,players=state.players.length;
+  return `<p class="room-wait-note">目前 ${devices} 台裝置、${players} 位玩家；每位玩家都要有人坐才能開始。${devices<players?'如果人數設多了，可以按上方「新遊戲」重新設定，大家再重選座位。':''}</p>`;
+}
 function roomBodyMarkup(){
   const status=room.status?`<p class="room-status${room.offline?' offline':''}" role="status">${h(room.status)}</p>`:'';
   const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
-  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section"><h3>座位</h3><p class="room-note">每台裝置各選一位玩家，這台也要選；選了就不能自己換。所有玩家都有人坐之後才能開始，選錯可以按「收回」。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
-  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section"><h3>選擇你的座位</h3><p class="room-note">選一位玩家當你自己，確認後不能自己換位子，選錯請房主收回。所有玩家都有人坐之後才能開始。</p>${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
+  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section">${state?`<h3>座位</h3><p class="room-note">每台裝置各選一位玩家，這台也要選；選了就不能自己換。所有玩家都有人坐之後才能開始，選錯可以按「收回」。</p>${seatCountHint()}`:'<h3>開局步驟</h3>'}${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
+  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section">${state?'<h3>選擇你的座位</h3><p class="room-note">選一位玩家當你自己，確認後不能自己換位子，選錯請房主收回。所有玩家都有人坐之後才能開始。</p>':'<h3>接下來</h3>'}${seatListMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
   const typed=$('#room-code-input')?.value??room.prefill??'';
   const fileWarning=location.protocol==='file:'?'<p class="form-error">目前是直接開啟檔案。其他裝置需要用網址（例如 GitHub Pages）開啟同一個遊戲才能加入。</p>':'';
   return `<p class="eyebrow">MULTI-DEVICE ROOM</p><h2 id="room-title">多裝置房間</h2><p class="room-lead">一台裝置建立房間，其他裝置輸入代碼加入；每台裝置只操作自己認領的玩家。</p>${fileWarning}<section class="room-section"><h3>建立房間</h3><p class="room-note">這台裝置會當主機並保存對局，遊戲期間請保持這個頁面開著。</p><button type="button" class="primary" data-room="create">建立房間</button></section><section class="room-section"><h3>加入房間</h3><div class="room-join"><input id="room-code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="例如 K7P2Q" aria-label="房間代碼" value="${h(typed)}"><button type="button" class="secondary" data-room="join">加入</button></div><p class="room-note">加入後會顯示房主的對局；離開房間就回到這台裝置原本的對局。</p></section>${error}${status}`;
@@ -678,6 +697,7 @@ function renderRoom(){
   if(room.role)chip.textContent=`房間 ${room.code} · ${isHost()?(room.offline?'暫時離線':`${onlineClients().length} 台裝置`):room.status==='已連線'&&state?(mine?`你：${mine.name}`:'還沒選座位'):room.status}`;
   $('#room-btn').classList.toggle('active',!!room.role);
   document.body.classList.toggle('room-guest',isGuest());
+  renderSetupRoomHint();
   if(!$('#room-modal').hidden)$('#room-body').innerHTML=roomBodyMarkup();
 }
 // Anyone without a seat is shown the seat list once per game, even if they closed the room dialog before the host started.
@@ -691,11 +711,12 @@ function promptSeat(){
 function openRoomModal(){$('#room-modal').hidden=false;renderRoom();$('#room-code-input')?.focus()}
 function closeRoomModal(){$('#room-modal').hidden=true}
 
-$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id});renderSetup()}});
+$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){addSetupPlayer();renderSetup()}});
+$('#setup-room-hint').addEventListener('click',e=>{const n=Number(e.target.closest('[data-match-devices]')?.dataset.matchDevices);if(!n)return;while(setupPlayers.length>n)setupPlayers.pop();while(setupPlayers.length<n)addSetupPlayer();renderSetup()});
 $('#setup-players').addEventListener('input',e=>{if(e.target.dataset.setupName!==undefined)setupPlayers[Number(e.target.dataset.setupName)].name=e.target.value});
 $('#setup-players').addEventListener('change',e=>{if(e.target.dataset.setupRole!==undefined)setupPlayers[Number(e.target.dataset.setupRole)].roleId=e.target.value});
 $('#setup-players').addEventListener('click',e=>{const i=e.target.dataset.removePlayer;if(i!==undefined&&setupPlayers.length>2){setupPlayers.splice(Number(i),1);renderSetup()}});
-$('#start-btn').addEventListener('click',async()=>{if(isGuest())return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
+$('#start-btn').addEventListener('click',async()=>{if(isGuest())return;const devices=onlineClients().length;if(isHost()&&setupPlayers.length!==devices&&!confirm(`房間裡有 ${devices} 台裝置，但你設了 ${setupPlayers.length} 位玩家。每位玩家都要有一台裝置坐下才能開始，確定要這樣開始嗎？`))return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
 $('.tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;rememberView();render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#snapshot-select').addEventListener('change',e=>{snapshotSelection=e.target.value;rememberView();renderDashboard()});
 $('#game').addEventListener('click',e=>{
