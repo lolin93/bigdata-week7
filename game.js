@@ -453,7 +453,7 @@ const viewKey='economy-board-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
 const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
 // Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
-const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
+const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
 let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
@@ -835,6 +835,10 @@ async function applyAction(action,amount,remote=false){
 
 const PEERJS_URL='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',PEERJS_SRI='sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR';
 let peerLoading=null;
+// A WebRTC link that a network blocks can stall silently, so a connection that has not opened by then is given up.
+const CONNECT_TIMEOUT_MS=15000;
+const P2P_FAILED='連不上房主：房間有找到，但兩台裝置之間的直接連線沒有建立成功。學校或公司網路常會擋這種連線，建議所有裝置都改連同一個手機熱點後再試一次。';
+const SIGNAL_FAILED='連線逾時：連不上配對伺服器，請確認網路後再試。';
 // PeerJS is only fetched when a room is used, so single-device play never needs the network.
 function loadPeerJs(){
   if(globalThis.Peer)return Promise.resolve();
@@ -859,8 +863,8 @@ function broadcastRoom(){
 }
 function resetRoom(extra={}){
   const peer=room.peer;
-  clearTimeout(room.reconnectTimer);
-  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,synced:false},extra);
+  clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);
+  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,synced:false},extra);
   setTimeout(()=>{try{peer?.destroy()}catch{}},300);
 }
 
@@ -890,6 +894,12 @@ function acceptGuest(conn){
   conn.on('data',raw=>onGuestMessage(guest,raw));
   conn.on('close',()=>{if(room.guests.delete(guest))broadcastRoom()});
   conn.on('error',()=>{});
+  // PeerJS never emits 'close' for a connection that failed before opening, so drop guests that never said hello.
+  setTimeout(()=>{
+    if(guest.clientId||!room.guests.delete(guest))return;
+    if(!conn.open)notify('有一台裝置想連進房間，但連線沒有成功；對方可以改用手機熱點再試。');
+    try{conn.close()}catch{}
+  },CONNECT_TIMEOUT_MS);
 }
 function onGuestMessage(guest,raw){
   const msg=parseGuestMessage(raw);if(!msg)return;
@@ -932,22 +942,37 @@ async function joinRoom(input){
   try{await loadPeerJs()}catch(e){room.status='';room.error=e.message;renderRoom();return}
   const peer=new Peer();
   Object.assign(room,{role:'guest',code,peer,closed:false,retries:0,synced:false,status:'正在連線…'});
+  armConnectTimeout();
   peer.on('open',()=>{if(room.peer===peer)connectToHost()});
   peer.on('disconnected',()=>{if(room.peer===peer&&!peer.destroyed)try{peer.reconnect()}catch{}});
   peer.on('error',err=>{
     if(room.peer!==peer)return;
     if(room.synced){if(err.type==='peer-unavailable')scheduleReconnect();return}
-    resetRoom({error:err.type==='peer-unavailable'?'找不到這個房間，請確認代碼，或請房主先建立房間。':`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`});render();
+    failJoin(err.type==='peer-unavailable'?'找不到這個房間，請確認代碼，或請房主先建立房間。':`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`);
   });
   render();
 }
+function failJoin(error){resetRoom({error});$('#room-modal').hidden=false;render()}
 function connectToHost(){
   const conn=room.peer.connect(roomPeerId(room.code),{reliable:true});
   room.hostConn=conn;
-  conn.on('open',()=>{if(room.hostConn!==conn)return;room.retries=0;room.status='已連線';conn.send({t:'hello',clientId});renderRoom()});
+  armConnectTimeout();
+  conn.on('open',()=>{if(room.hostConn!==conn)return;clearTimeout(room.connectTimer);room.connectTimer=null;room.retries=0;room.status='已連線';conn.send({t:'hello',clientId});renderRoom()});
   conn.on('data',msg=>{if(room.hostConn===conn)onHostMessage(msg)});
-  conn.on('close',()=>{if(room.hostConn===conn&&isGuest()&&!room.closed)scheduleReconnect()});
-  conn.on('error',()=>{});
+  conn.on('close',()=>{if(room.hostConn===conn&&isGuest()&&!room.closed)dropHostConn()});
+  // A connection that fails before opening only emits 'error'; one that stalls emits nothing until the timeout.
+  conn.on('error',()=>{if(room.hostConn===conn&&!conn.open&&isGuest()&&!room.closed)dropHostConn()});
+}
+function armConnectTimeout(){
+  clearTimeout(room.connectTimer);
+  room.connectTimer=setTimeout(()=>{room.connectTimer=null;if(isGuest()&&!room.closed&&!room.hostConn?.open)dropHostConn()},CONNECT_TIMEOUT_MS);
+}
+// A guest already in the game keeps retrying; one that never got in sees why and is back on the join form.
+function dropHostConn(){
+  clearTimeout(room.connectTimer);room.connectTimer=null;
+  const conn=room.hostConn;room.hostConn=null;try{conn?.close()}catch{}
+  if(room.synced){scheduleReconnect();return}
+  failJoin(room.peer?.open?P2P_FAILED:SIGNAL_FAILED);
 }
 function scheduleReconnect(){
   if(room.reconnectTimer||room.closed)return;

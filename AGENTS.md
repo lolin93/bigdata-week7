@@ -56,8 +56,14 @@
 - 原因：在公開網址上，Chromium 的 host 候選位址是 mDNS（`xxxx.local`），只剩 srflx（學校對外 IP `163.25.119.118`），同一台電腦的兩個頁籤需要 NAT 迴流，學校網路不支援。在 `localhost` 上瀏覽器會給真實區網位址，所以本機測試能連上。
 - 結論：要讓線上版穩定跨網路連線，需要 TURN 中繼。
 
+第三段（連線逾時，使用者選「只修逾時提示」，不加 TURN）：
+- 原因：PeerJS 1.5.4 的 `DataConnection.close()` 在連線從未 `open` 時不會發出 `close`；ICE 失敗時只發 `error`，卡住時什麼都不發。舊程式忽略 `error`，所以訪客停在「正在連線…」。
+- `app.js`：`CONNECT_TIMEOUT_MS=15000`。訪客在 `joinRoom` 和每次 `connectToHost` 呼叫 `armConnectTimeout()`；`open` 時清掉計時器。逾時、`open` 之前的 `error`、或 `close` 都走 `dropHostConn()`：已同步的訪客照舊 `scheduleReconnect()`（每次重連也有逾時，不會卡在同一次）；還沒同步的訪客呼叫 `failJoin()`，重設房間並打開對話框顯示 `P2P_FAILED`（建議改用手機熱點）或 `SIGNAL_FAILED`（配對伺服器沒回應）。代碼保留在輸入框。
+- 房主：`acceptGuest` 15 秒後仍沒 `hello` 的連線會從 `room.guests` 移除；若連線從未 `open`，會跳提示。
+- `styles.css`：`.room-card .form-error` 改成紅字底色框（原本被 `.modal-card p:not(.eyebrow)` 蓋成灰字）。
+- 驗證：在 Chromium 用假的 `Peer`（模擬 1.5.4 的事件行為）加上 Playwright 假時鐘跑 8 個情境：只發 `error`、完全卡住、配對伺服器不回應、正常連線 60 秒不誤判、已加入的訪客重連卡住會繼續重試並在 15 次後顯示離線、房主清掉沒開成的連線。舊版 2/8 通過（重現「正在連線…」卡住），新版 8/8。375px 無橫向溢出。28 個單元測試通過。這個腳本需要 Playwright，沒有放進 repo。
+
 尚未做／已知限制（下一步可考慮，修改前要先問使用者）：
-- **Bug**：點對點連線失敗時，PeerJS 不一定會觸發 `close`/`error`，訪客會一直停在「正在連線…」。需要加連線逾時（例如 15 秒未 `open` 就提示並中止或重試），房主端也要清掉一直沒 `hello` 的連線。
 - 沒有 TURN 伺服器。免費選項（例如 Metered、Cloudflare）多半要使用者自己註冊帳號取得金鑰，而且金鑰會出現在公開的前端程式裡；要不要用、用哪個，請先問使用者。
 - 還沒用兩台實體裝置、不同網路測試過。
 - 房主重新整理頁面會換一個新代碼，訪客要重新加入；房主的座位分配只存在記憶體。
