@@ -1,7 +1,7 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 
-const files=['data.js','engine.js','sync.js','room.js','app.js'];
+const files=['data.js','investment.js','engine.js','auction.js','sync.js','room.js','app.js'];
 const pieces=files.map(file=>readFileSync(new URL(file,import.meta.url),'utf8')
   .replace(/^import .*? from '\.\/[^']+';\r?\n/gm,'')
   .replace(/^export (const|function) /gm,'$1 '));

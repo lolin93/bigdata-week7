@@ -2,7 +2,7 @@
 // Networking (PeerJS) lives in app.js; everything here is deterministic so it can be unit tested.
 import {companyPosition} from './engine.js';
 // v2: rooms with the company lobby; pages from before it cannot join (and break) these rooms.
-export const ROOM_PREFIX='econboard-v2-';
+export const ROOM_PREFIX='econboard-v3-';
 const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_CODE_LENGTH=5;
 const MAX_PLAYERS=8,NAME_LENGTH=16;
@@ -75,6 +75,13 @@ const safeId=v=>typeof v==='string'&&/^[\w-]{1,64}$/.test(v)?v:null;
 // Guest messages are untrusted: only a fixed set of shapes gets through.
 export function parseGuestMessage(raw){
   if(!raw||typeof raw!=='object')return null;
+  if(raw.t==='investment'){
+    if(typeof raw.turn!=='string'||raw.turn.length>100)return null;
+    if(raw.action==='buy'&&typeof raw.targetRole==='string'&&/^[a-z]{1,32}$/.test(raw.targetRole))return {t:'investment',action:'buy',targetRole:raw.targetRole,turn:raw.turn};
+    if(raw.action==='sell'&&Number.isSafeInteger(raw.cardId)&&raw.cardId>0)return {t:'investment',action:'sell',cardId:raw.cardId,turn:raw.turn};
+    return null;
+  }
+  if(raw.t==='auction-bid'){return typeof raw.auctionId==='string'&&raw.auctionId.length<=150&&Number.isSafeInteger(raw.amount)&&raw.amount>=0?{t:'auction-bid',auctionId:raw.auctionId,amount:raw.amount}:null;}
   if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
   if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
   if(raw.t==='pick'){const roleId=safeId(raw.roleId);return roleId&&(raw.name===undefined||typeof raw.name==='string')?{t:'pick',roleId,name:cleanPlayerName(raw.name)}:null}

@@ -1,3 +1,5 @@
+import {investmentTiles,investmentRules,investmentState,investmentTurn,investmentCards,investmentBuy,investmentSell} from './investment.js';
+import {auctionCatalog,auctionState,auctionOpen,auctionSubmit,auctionResolve} from './auction.js';
 import {ROLES,METRICS,METRIC_LABELS,GLOBAL_EVENTS,PERSONAL_EVENTS,SECTOR_EVENTS,ALL_EVENTS,FED_RULES,BOARD} from './data.js';
 import {createGame,rollDice,drawEvent,movementPath,endTurn,adjustStaff,issueLoan,repayLoan,updateBadLoans,financials,companyPosition,effectBreakdown,eventRemaining,makeSnapshot,getEconomicSnapshot,getFedRuleEvaluations,getFedDecision,exportGame,importGame} from './engine.js';
 import {syncInfo,isNewerGame} from './sync.js';
@@ -107,6 +109,7 @@ async function withGameLock(work){
   if(globalThis.navigator?.locks?.request)return navigator.locks.request(`${storageKey}-write`,{mode:'exclusive'},work);
   return work();
 }
+let auctionPrivate={id:null,bids:{}};
 const BUSY_MESSAGE='棋盤正在播放動畫，請稍候再試。';
 // Resolves to an error message when the action did not go through, so a room host can report it to the guest.
 async function run(fn){
@@ -139,7 +142,7 @@ function renderSetup(){
 function currentPlayer(){return state?.players[state.turnIndex]}
 function boardCoords(i){if(i<=6)return [1,i+1];if(i<=12)return [i-5,7];if(i<=18)return [7,19-i];return [25-i,1]}
 function sectorForTile(i){const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];return sectors[((Math.floor((i-3)/3)%6)+6)%6]}
-function tileName(tile,i){return tile.type==='sector'?sectorForTile(i):tile.label}
+function tileName(tile,i){if(investmentTiles.includes(i))return '投資＋事件';return tile.type==='sector'?sectorForTile(i):tile.label}
 function currentCard(){
   if(state.phase!=='manage'||!state.lastDraw||!state.dice)return null;
   const card=state.lastDraw;
@@ -192,9 +195,10 @@ function slotMarkup(values){
   }).join('')}</div>`;
 }
 // In a room only the device that controls the current player may press the draw deck or turn buttons.
-function renderBoard(){renderBoardContent();if(room.role&&state?.status==='playing'&&!iCanAct())$('#board [data-action="draw-card"]')?.setAttribute('disabled','')}
+function renderBoard(){renderBoardContent();if(state&&auctionState(state).active||room.role&&state?.status==='playing'&&!iCanAct())$('#board [data-action="draw-card"]')?.setAttribute('disabled','')}
 function renderTurn(){renderTurnContent();gateTurnControls()}
 function gateTurnControls(){
+  if(state&&auctionState(state).active){document.querySelectorAll('#turn-content button,#turn-content input').forEach(x=>{x.disabled=true});$('#turn-content').insertAdjacentHTML('beforeend','<p class="room-wait-note">競標中，先在上方出價或放棄。</p>');return;}
   if(!room.role||!state)return;
   const playing=state.status==='playing';
   if(playing?iCanAct():!isGuest())return;
@@ -336,6 +340,7 @@ function renderFed(){
 function chart(data,key,title,color){if(!data.length)return `<div class="empty-state">${title}：等待第一季結算。</div>`;const values=data.map(x=>x[key]).filter(Number.isFinite),min=Math.min(...values),max=Math.max(...values),span=max-min||1;const points=data.map((s,i)=>`${35+(i/(Math.max(data.length-1,1)))*660},${165-((s[key]-min)/span)*125}`).join(' ');return `<div class="history-chart"><h3>${title}</h3><svg viewBox="0 0 730 190" role="img" aria-label="${title}歷史折線圖"><line x1="30" y1="165" x2="700" y2="165" stroke="#dfe8e3"/><polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${data.map((s,i)=>{const x=35+(i/Math.max(data.length-1,1))*660,y=165-((s[key]-min)/span)*125;return `<circle cx="${x}" cy="${y}" r="4" fill="${color}"><title>第 ${s.round} 季：${decimal(s[key],1)}</title></circle><text x="${x}" y="185" text-anchor="middle" font-size="10" fill="#899b93">${s.round}</text>`}).join('')}</svg><div class="chart-legend"><span><i style="background:${color}"></i>${title} · 依已結算快照</span></div></div>`}
 function renderHistory(){const data=state.economicHistory;$('#history-body').innerHTML=`<div class="history-layout"><div>${chart(data,'revenueTotal','全市場營收', '#0e9186')}${chart(data,'stockIndex','股市指數', '#597bae')}</div><div><div class="history-chart"><h3>各季數據</h3>${data.length?`<div style="overflow:auto"><table class="history-table"><thead><tr><th>季數</th><th>通膨</th><th>成長</th><th>失業</th><th>利率</th></tr></thead><tbody>${data.slice().reverse().map(s=>`<tr><td>${s.round}</td><td>${decimal(s.inflationPct,1)}%</td><td>${s.growthPct===null?'—':decimal(s.growthPct,1)+'%'}</td><td>${decimal(s.unemploymentPct,1)}%</td><td>${decimal(s.fedRatePct,2)}%</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">尚無已結算季數。</p>'}</div><div class="history-chart"><h3>遊戲動態</h3><div class="log-list">${state.log.length?state.log.slice(0,60).map(x=>`<div class="log-item">${h(x)}</div>`).join(''):'<div class="log-item">等待玩家啟動拉霸。</div>'}</div></div></div></div>`}
 function render(){
+  auctionRender();investmentRender();
   const onHome=page==='home',lobbyWait=!!room.role&&!state;
   renderRoom();
   $('#room-wait').hidden=onHome||!lobbyWait;
@@ -444,12 +449,13 @@ async function rollWithAnimation(){
 const AMOUNT_INPUTS={hire:'#staff-count',layoff:'#staff-count',loan:'#loan-amount',repay:'#loan-amount','mark-bad':'#bad-amount','recover-bad':'#bad-amount'};
 // Shared by local clicks and actions a room host receives from guests; resolves to an error message or null.
 async function applyAction(action,amount,remote=false){
+  if(state&&auctionState(state).active)return '請先完成目前的商機競標。';
   if(action==='roll')return rollWithAnimation();
   if(animation)return BUSY_MESSAGE;
   if(action==='draw-card')return run(()=>drawEvent(state));
   if(state.phase==='draw')return remote?'請先抽事件卡。':null;
   if(!remote&&currentCard())return null;
-  if(action==='end-turn')return run(()=>{const result=endTurn(state);if(result){snapshotSelection='latest';rememberView();notify(result.finished?'對局結束，請查看勝負結果。':`第 ${result.snapshot.round} 季已結算。`)}});
+  if(action==='end-turn')return run(()=>{const result=endTurn(state);if(result&&!result.finished&&result.snapshot.round%2===0)auctionOpen(state);if(result){snapshotSelection='latest';rememberView();notify(result.finished?'對局結束，請查看勝負結果。':`第 ${result.snapshot.round} 季已結算。`)}});
   return run(()=>{const id=currentPlayer().id,n=amount;if(action==='hire')adjustStaff(state,id,n);else if(action==='layoff')adjustStaff(state,id,-n);else if(action==='loan')issueLoan(state,id,n);else if(action==='repay')repayLoan(state,id,n);else if(action==='mark-bad')updateBadLoans(state,id,n);else if(action==='recover-bad')updateBadLoans(state,id,-n)});
 }
 
@@ -570,6 +576,12 @@ function onGuestMessage(guest,raw){
     try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),msg.playerId,guest.clientId)}catch(e){reject(e.message);return}
     broadcastRoom();render();return;
   }
+  if(msg.t==='investment'){
+    room.queue=room.queue.then(async()=>{syncSeats();if(!state||!canAct(room.seats,state,guest.clientId)){reject('還沒輪到你操作。');return;}const actor=Object.keys(room.seats).find(id=>room.seats[id]===guest.clientId);const error=await investmentReceive(actor,msg);if(error)reject(error);}).catch(()=>{});return;
+  }
+  if(msg.t==='auction-bid'){
+    room.queue=room.queue.then(async()=>{const playerId=Object.keys(room.seats).find(id=>room.seats[id]===guest.clientId);if(!playerId){reject('你沒有玩家座位。');return;}const error=await auctionReceive(playerId,msg.amount,msg.auctionId);if(error)reject(error);}).catch(()=>{});return;
+  }
   // Actions run one at a time and the turn owner is checked when each one runs, so a double-clicked
   // "交給下一位" cannot end the next player's turn too.
   room.queue=room.queue.then(async()=>{
@@ -634,7 +646,7 @@ function scheduleReconnect(){
 }
 function onHostMessage(msg){
   if(!msg||typeof msg!=='object')return;
-  if(msg.t==='reject'){notify(String(msg.message||'房主沒有接受這個操作。').slice(0,120));return}
+  if(msg.t==='reject'){render();notify(String(msg.message||'房主沒有接受這個操作。').slice(0,120));return}
   if(msg.t==='closed'){room.closed=true;room.status='房主已關閉房間';try{room.hostConn?.close()}catch{}notify('房主已關閉房間，畫面停在最後的狀態。');render();return}
   if(msg.t!=='state')return;
   room.seats=msg.seats&&typeof msg.seats==='object'?Object.fromEntries(Object.entries(msg.seats).filter(([,v])=>typeof v==='string')):{};
@@ -771,8 +783,9 @@ $('#snapshot-select').addEventListener('change',e=>{snapshotSelection=e.target.v
 $('#game').addEventListener('click',e=>{
   const a=e.target.closest('[data-action]');if(!a||!state)return;
   const action=a.dataset.action;
+  if(auctionState(state).active){notify('請先完成上方商機競標。');return;}
   if(action==='new-game'){void resetGame();return}
-  if(action==='dismiss-card'){if(animation)return;dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();return}
+  if(action==='dismiss-card'){if(animation)return;dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();investmentRender();return}
   if(!iCanAct()){notify(missingSeats().length?SEATS_MISSING:'還沒輪到你，請等待目前的玩家操作。');return}
   const amount=AMOUNT_INPUTS[action]?Number($(AMOUNT_INPUTS[action])?.value):undefined;
   if(isGuest()){
@@ -847,3 +860,85 @@ const invitedRoom=normalizeRoomCode(new URLSearchParams(location.search).get('ro
 if(invitedRoom){room.prefill=invitedRoom;$('#room-modal').hidden=false}
 renderHomeRoles();
 render();
+
+// Local opportunity prototype. Bid amounts stay here, never inside the broadcast game state.
+function auctionSecrets(){
+ const active=state&&auctionState(state).active;if(!active)return {};
+ if(auctionPrivate.id!==active.id){
+  auctionPrivate={id:active.id,bids:{}};
+  if(!isGuest()&&active.submittedIds.length){active.submittedIds=[];notify('競標已恢復，請大家重新出價。');}
+ }
+ return auctionPrivate.bids;
+}
+async function auctionReceive(playerId,amount,id){
+ return run(()=>{if(!state)throw Error('對局尚未開始。');const secret=auctionSecrets();if(auctionSubmit(state,secret,playerId,amount,id)){auctionResolve(state,secret);auctionPrivate={id:null,bids:{}};}});
+}
+function auctionEffectText(item){return item.kind==='saving'?`每季省 ${item.amount} × ${item.duration} 季`:`每季收入 +${item.amount} × ${item.duration} 季`;}
+function auctionPanel(){
+ let el=$('#opportunity-panel');if(el)return el;
+ el=document.createElement('section');el.id='opportunity-panel';$('#game').prepend(el);
+ el.addEventListener('click',async event=>{
+  const b=event.target.closest('[data-auction]');if(!b)return;
+  const action=b.dataset.auction;
+  if(action==='skip'){
+   if(!isHost()||!confirm('尚未出價的玩家將全部視為放棄，確定揭標？'))return;
+   await run(()=>{const active=auctionState(state).active;if(!active)return;const secret=auctionSecrets();for(const id of active.eligibleIds.filter(id=>!active.submittedIds.includes(id)))auctionSubmit(state,secret,id,0,active.id);auctionResolve(state,secret);auctionPrivate={id:null,bids:{}};});return;
+  }
+  const active=state&&auctionState(state).active;if(!active)return;
+  const p=room.role?mySeat():state.players.find(p=>active.eligibleIds.includes(p.id)&&!active.submittedIds.includes(p.id));
+  if(!p)return;
+  const input=el.querySelector('#auction-amount');const amount=action==='pass'?0:Number(input?.value);
+  if(!Number.isSafeInteger(amount)||amount<0||amount>0&&amount>state.companies[p.roleId].cash){notify('請輸入現金範圍內的整數金額。');return;}
+  if(isGuest()){sendToHost({t:'auction-bid',auctionId:active.id,amount});b.disabled=true;return;}
+  const error=await auctionReceive(p.id,amount,active.id);if(error)notify(error);
+ });return el;
+}
+function auctionRender(){
+ const el=auctionPanel();el.hidden=!state||page!=='game';if(!state)return;
+ if(!isGuest())auctionSecrets();
+ const mod=auctionState(state),a=mod.active,r=mod.lastResult;
+ const oldInput=el.querySelector('#auction-amount');const draft=oldInput?.value,focused=document.activeElement===oldInput;
+ if(a){
+  const mine=room.role?mySeat():state.players.find(p=>a.eligibleIds.includes(p.id)&&!a.submittedIds.includes(p.id));
+  const eligible=mine&&a.eligibleIds.includes(mine.id),done=mine&&a.submittedIds.includes(mine.id);
+  const canBid=eligible&&!done&&!room.closed;
+  el.innerHTML=`<div class="op-head"><span>市場商機 · ${a.submittedIds.length} / ${a.eligibleIds.length} 人已完成</span><span class="op-pill">同步競標</span></div><div class="op-content"><div class="op-icon">${a.item.icon}</div><div><h2>${h(a.item.title)}</h2><p class="op-story">${h(a.item.story)}</p><div class="op-reward">得標後：${auctionEffectText(a.item)}</div><p class="op-small">最高價者付錢拿合約，其他人不扣錢。</p></div></div><div class="op-bottom">${canBid?`<div><strong>${h(mine.name)}，你願意花多少？</strong><span class="op-small"> 現金 ${money(state.companies[mine.roleId].cash)}</span><div class="op-actions"><input id="auction-amount" aria-label="你的競標金額" type="number" min="0" max="${Math.max(0,Math.floor(state.companies[mine.roleId].cash))}" step="1" value="${Math.max(0,Math.min(100,Math.floor(state.companies[mine.roleId].cash)))}"><button class="primary" data-auction="bid">出價</button><button class="secondary" data-auction="pass">放棄</button></div></div>`:`<strong>${done?'✓ 已送出，等待其他玩家':mine?'本次商機不適用你的企業':'你正在觀看競標'}</strong>`}<div class="op-players">${a.eligibleIds.map(id=>`<span>${h(state.players.find(p=>p.id===id)?.name)} ${a.submittedIds.includes(id)?'✓':'…'}</span>`).join('')}</div>${isHost()?'<details><summary>有人沒回應？</summary><button class="quiet" data-auction="skip">將未回應玩家視為放棄並揭標</button></details>':''}</div>`;
+  if(canBid&&draft!==undefined&&el.dataset.viewer===mine.id&&el.dataset.auction===a.id){el.querySelector('#auction-amount').value=draft;if(focused)el.querySelector('#auction-amount').focus();}
+  el.dataset.viewer=mine?.id||'';el.dataset.auction=a.id;
+ }else{
+  const winner=r&&state.players.find(p=>p.id===r.winnerId),next=state.round%2===0?state.round:state.round+1;
+  el.innerHTML=r?`<div class="op-result"><span class="op-icon">${r.item.icon}</span><div><strong>${winner?`${h(winner.name)} 以 ${money(r.price)} 得標！`:'本次無人出價'}</strong><p class="op-small">${h(r.item.title)}${winner?` · ${auctionEffectText(r.item)}`:''}${r.tie?' · 同價抽籤':''}</p></div><details><summary>看出價</summary>${r.bids.map(b=>`<p>${h(state.players.find(p=>p.id===b.playerId)?.name)}：${b.amount?money(b.amount):'放棄'}</p>`).join('')}</details></div>`:`<div class="op-preview"><span>🏷️ 下次市場商機：第 ${next} 季結算後</span><span class="op-small">適合兩家以上企業才開標</span></div>`;
+ }
+}
+
+async function investmentReceive(actor,msg){
+ return run(()=>{if(msg.action==='buy')investmentBuy(state,actor,msg.targetRole,msg.turn);else if(msg.action==='sell')investmentSell(state,actor,msg.cardId,msg.turn);else throw Error('未知的投資操作。');});
+}
+function investmentPanel(){
+ let el=$('#investment-panel');if(el)return el;
+ el=document.createElement('section');el.id='investment-panel';$('#opportunity-panel').after(el);
+ el.addEventListener('click',async event=>{
+  const b=event.target.closest('[data-investment]');if(!b||!state)return;
+  const action=b.dataset.investment;
+  const mine=room.role?mySeat():currentPlayer();if(!mine||room.role&&!iCanAct()){notify('請等自己的回合交易。');return;}
+  const msg={t:'investment',action,turn:investmentTurn(state)};
+  if(action==='buy')msg.targetRole=b.dataset.target;
+  else if(action==='sell')msg.cardId=Number(b.dataset.card);
+  if(isGuest()){sendToHost(msg);b.disabled=true;return;}
+  const error=await investmentReceive(mine.id,msg);if(error)notify(error);
+ });return el;
+}
+function investmentRender(){
+ const el=investmentPanel();el.hidden=!state||page!=='game';if(!state)return;
+ const mine=room.role?mySeat():currentPlayer(),cards=mine?investmentCards(state,mine.id):[],mod=investmentState(state);
+ const canTrade=mine&&state.status==='playing'&&state.phase==='manage'&&!auctionState(state).active&&!animation&&(!room.role||iCanAct())&&!currentCard();
+ const isTile=mine&&investmentTiles.includes(mine.position),already=mod.boughtTurns.includes(investmentTurn(state));
+ const canBuy=canTrade&&isTile&&!already&&cards.length<2&&state.companies[mine.roleId].cash>=200;
+ const icon=id=>ROLES.find(r=>r.id===id)?.icon||'🏢',name=id=>ROLES.find(r=>r.id===id)?.name||id;
+ const targets=mine?state.players.filter(p=>p.id!==mine.id):[];
+ let content=cards.length?`<div class="iv-grid">${cards.map(c=>{const diff=c.value-c.cost,change=mod.lastChanges.find(x=>x.id===c.id);return `<article class="iv-card"><div class="iv-row"><span class="iv-icon">${icon(c.targetRole)}</span><span class="${diff<0?'iv-loss':'iv-profit'}">${diff>0?`賺 +${diff}`:diff<0?`虧 ${diff}`:'賺賠 0'}</span></div><strong>${h(name(c.targetRole))}</strong><span class="iv-value">${money(c.value)}</span>${change?`<small>${h(change.eventName)}：${change.from} → ${change.to}</small>`:''}${canTrade?`<button class="secondary" data-investment="sell" data-card="${c.id}">賣出 +${money(c.value)}</button>`:''}</article>`;}).join('')}</div>`:'<p class="iv-note">停在棋盤的「投資＋事件」格，就能買入其他企業。</p>';
+ if(canBuy)content+=`<h3>選一家投資</h3><div class="iv-grid">${targets.map(p=>`<article class="iv-card"><span class="iv-icon">${icon(p.roleId)}</span><strong>${h(name(p.roleId))}</strong><small>${h(p.name)}</small><button class="primary" data-investment="buy" data-target="${h(p.roleId)}">投資 −200</button></article>`).join('')}</div>`;
+ else if(canTrade&&isTile)content+=`<p class="iv-note">${already?'本回合已投資 ✓':cards.length>=2?'已持有兩張，先賣出一張才能再買。':'現金不足 200。'}</p>`;
+ const who=mine?`${h(mine.name)}的投資`:'企業投資';
+ el.innerHTML=`<div class="iv-head"><strong>📈 ${who} ${cards.length} / 2</strong>${cards.length?`<span>價值 ${money(cards.reduce((n,c)=>n+c.value,0))}</span>`:''}<details><summary aria-label="投資規則">？</summary><p>200 買一張，每回合最多買一張、最多持有兩張。新事件依被投資企業的影響調整 ±50 或 ±100，卡片價值介於 0～400。自己的經營回合可賣出，價值計入淨資產。事件只調價一次。</p></details></div><div class="iv-body">${content}</div>`;
+}

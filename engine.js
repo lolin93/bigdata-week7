@@ -1,3 +1,5 @@
+import {investmentValue,investmentEvent} from './investment.js';
+import {auctionBonus} from './auction.js';
 import {METRICS,ROLES,GLOBAL_EVENTS,PERSONAL_EVENTS,SECTOR_EVENTS,ALL_EVENTS,FED_RULES,FED_PRIORITY,BOARD} from './data.js';
 
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
@@ -36,7 +38,7 @@ export function effectBreakdown(state,roleId,metric,round=state.round){
   });
 }
 export function metricPct(state,roleId,metric,round=state.round){return clamp(effectBreakdown(state,roleId,metric,round).reduce((n,x)=>n+x.pct,0),-60,100)}
-export function assetValue(state,roleId,round=state.round){const c=state.companies[roleId];return round2(c.assetReferenceValue*(1+metricPct(state,roleId,'asset_value',round)/100))}
+export function assetValue(state,roleId,round=state.round){const c=state.companies[roleId];return round2(c.assetReferenceValue*(1+metricPct(state,roleId,'asset_value',round)/100))+investmentValue(state,roleId)}
 export function financials(state,roleId,round=state.round){
   const role=roleById(roleId),c=state.companies[roleId],flows={};
   const d=state.fedRatePercent-4;
@@ -52,7 +54,9 @@ export function financials(state,roleId,round=state.round){
   const ownerId=state.players.find(p=>p.roleId===roleId)?.id;
   if(round===state.round&&state.struckPlayerIds?.includes(ownerId))for(const m of METRICS)if(flows[m]>0)flows[m]=0;
   const revenue=flows.revenue,costs=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v<0).reduce((s,[,v])=>s+v,0),otherIncome=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v>0).reduce((s,[,v])=>s+v,0);
-  return {flows,revenue,costs:round2(costs),otherIncome:round2(otherIncome),profit:round2(Object.values(flows).reduce((s,v)=>s+v,0)),assetValue:assetValue(state,roleId,round)};
+  const bonus=round===state.round&&state.struckPlayerIds?.includes(ownerId)?0:auctionBonus(state,roleId,round,{costs});
+  flows.investment=(flows.investment||0)+bonus;
+  return {flows,revenue,costs:round2(costs),otherIncome:round2(otherIncome+bonus),profit:round2(Object.values(flows).reduce((s,v)=>s+v,0)),assetValue:assetValue(state,roleId,round)};
 }
 export function companyPosition(state,roleId){const c=state.companies[roleId];return {cash:c.cash,assetValue:assetValue(state,roleId),debt:c.debt,netWorth:c.cash+assetValue(state,roleId)-c.debt}}
 
@@ -110,7 +114,10 @@ export function drawEvent(state){
   if(state.status!=='playing'||state.phase!=='draw')throw Error('現在不需要抽卡。');
   const player=state.players[state.turnIndex],tile=BOARD[player.position];
   if(!state.dice||tile.type==='start')throw Error('目前停格沒有事件卡。');
+  const before=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
   const active=drawForTile(state,tile,player.id);
+  const after=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
+  investmentEvent(state,before,after,eventById(active.eventId)?.name||'市場事件');
   state.phase='manage';
   return active;
 }
