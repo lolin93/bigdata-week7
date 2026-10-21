@@ -29,7 +29,8 @@
 
 ### 線上展示
 - GitHub Pages：<https://soymilk0211.github.io/bigdata-week7/>，由使用者在 GitHub 設定為「Deploy from a branch → `feature/my-improvement` / (root)」。每次 push 到這個分支都會自動重新部署（約 1～2 分鐘）。
-- 2026-10-21 使用者同意把 `feature/my-improvement` 合併進 `main`（快轉，兩者內容相同）。GitHub Pages 仍從 `feature/my-improvement` 部署；之後新功能先在功能分支完成，合併進 `main` 前要問使用者。
+- **不要把 `feature/my-improvement` 合併或快轉進 `main`**（2026-10-21 使用者要求）。作業單（`docs/GitHub-Codex-作業單.docx`）的流程是：在功能分支完成，再開 Pull Request（base：自己的 `main`），用 PR 展示兩條分支的差異；合併由使用者在 PR 上自己決定。曾經誤快轉一次，已用 `--force-with-lease` 把 `main` 退回 `ca0f691`。
+- `main` 只有原作品，加上使用者要求的一個 commit（`ca0f691`，README 開頭的「線上直接玩」連結）；房間功能只在功能分支。GitHub Pages 從 `feature/my-improvement` 部署。
 - 這台電腦沒有 `gh`，內建瀏覽器也沒登入 GitHub；Repo 設定只能請使用者自己改。
 
 ### 多裝置房間（用代碼加入）— 已可使用
