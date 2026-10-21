@@ -2,9 +2,7 @@
 
 多人財經桌遊，可以在一台電腦上輪流玩，也可以用房間代碼讓不同裝置一起玩。單頁遊玩可直接開啟 [index.html](./index.html)。
 
-**線上展示：<https://soymilk0211.github.io/bigdata-week7/>**（GitHub Pages，從 `feature/my-improvement` 分支部署）
-
-**線上直接玩：<https://soymilk0211.github.io/bigdata-week7/>**（線上版來自 `feature/my-improvement` 分支，多了多裝置房間功能）
+**線上直接玩：<https://soymilk0211.github.io/bigdata-week7/>**（GitHub Pages，從 `feature/my-improvement` 分支部署）
 
 ## 同一瀏覽器開多個頁籤
 
