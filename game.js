@@ -532,6 +532,8 @@ function adoptShared(incoming){
   return true;
 }
 function ensureFresh(){
+  // A room game lives only in the host's memory (never in the single-device save), so there is no other tab to catch up with.
+  if(room.role)return true;
   const stored=readStored();
   if(stored===null&&state){cancelAnimation();state=null;render();notify('其他頁籤已開始新遊戲，畫面已更新。');return false}
   if(stored&&isNewerGame(stored,state)){adoptShared(stored);notify('對局已由其他頁籤更新，請確認目前回合後再操作。');return false}
@@ -1262,7 +1264,7 @@ $('#home-room-btn').addEventListener('click',openRoomModal);
 $('#new-game-btn').addEventListener('click',()=>{void resetGame()});
 $('#open-tab-btn').addEventListener('click',()=>{window.open(location.href,'_blank','noopener')});
 $('#export-btn').addEventListener('click',()=>{if(!state){notify('目前沒有可匯出的對局。');return}const blob=new Blob([exportGame(state)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`經濟棋局-第${state.round}季.json`;a.click();URL.revokeObjectURL(url)});
-$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;if(isGuest()){notify('只有房主可以匯入存檔。');e.target.value='';return}try{const imported=importGame(await file.text());await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='business';snapshotSelection='latest';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
+$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;if(room.role){notify('多人連線中不能匯入存檔；請先離開房間。');e.target.value='';return}try{const imported=importGame(await file.text());await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='business';snapshotSelection='latest';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
 window.addEventListener('storage',e=>{
   if(e.key!==storageKey||room.role)return;
   if(e.newValue){try{adoptShared(importGame(e.newValue))}catch{}}

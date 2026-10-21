@@ -124,6 +124,7 @@ main（原作品，作業 PR 的 base，不動）
 - `app.js`：`createRoom` 在開房前清掉畫面上的對局（`state=null`，單機存檔不動），開房失敗時用 `readStored()` 還原。`save()` 遇到房主只 `broadcastRoom()`，不寫 `localStorage`、不送 `BroadcastChannel`；`storage`／`BroadcastChannel`／`syncOnFocus` 在 `room.role` 時一律忽略（原本只擋訪客）。`resetGame` 對房主直接回大廳（不 `clearSave`，保留大廳選擇並打開房間視窗）。`closeRoom` 送出 `closed` 後 300 ms 重新載入（去掉 `?room=`），跟訪客「離開房間」一樣回到單機模式。開局前房主和訪客都顯示 `#room-wait`（`render()` 依角色填 `#room-wait-title`／`#room-wait-copy`），房間模式不再顯示單機設定畫面；第七段的 `#setup-room-hint`、`body.room-host` 已移除。`body.in-room` 隱藏 `.single-only`（開啟同步頁籤、匯入存檔）。首頁：`#home-room-btn`；在房間裡時首頁只顯示「回到多人連線」。介面上「多裝置房間」全部改稱「多人連線」。
 - `room.js`：`ROOM_PREFIX` 改成 `econboard-v2-`（第七段改了房間訊息卻沒升版，這次補上），舊版快取的頁面進不了新版房間。
 - `build.mjs`：見「專案結構」，`index.html` 用內容雜湊蓋版本號，頁尾顯示版本。
+- **回歸修正（同日，使用者回報「按啟動拉霸畫面變回等大家選企業」）**：每個動作（拉霸、抽卡、經營、交棒）會先跑 `ensureFresh()`，用 `localStorage` 檢查同一瀏覽器的其他頁籤有沒有開新局。房間對局不再寫進 `localStorage` 後，它在房主身上看到「沒有存檔」就以為別的頁籤開了新局，把 `state` 清成 `null`。修正：`ensureFresh()` 在 `room.role` 時直接回傳 `true`（房間對局只存在房主記憶體裡）；匯入存檔在房間裡一律拒絕。測試沒抓到的原因：檢查寫成「`phase` 不是 `roll`」，`state` 變成 `null` 時 `phase` 是 `undefined`，剛好也算通過。之後檢查遊戲還在時要寫 `state&&…`，並加了「房間裡從頭玩完一季」的測試（房主沒有單機存檔、房主和訪客各拉霸／抽卡／交棒，兩邊都到第 2 季且是同一局）：線上那版重現失敗，修正後 6/6。
 - 驗證：34 個單元測試。Chromium＋真的 PeerJS＋本機 PeerServer：新增 14 個模式情境全過（首頁兩個入口、手機上有舊局時開房間看到大廳而不是座位清單、房間裡隱藏同步頁籤／匯入、有舊局的訪客也看到大廳、房間對局不寫進房主單機存檔、房主另一個頁籤不被同步、房間裡按「新遊戲」回大廳且保留選擇、訪客離開與房主關房後各自的單機對局都回來、頁尾版本和資源網址一致、`file://` 直接開啟仍可用）。大廳 19 個、座位 9 個（改成從大廳開局後測鎖定與接手）、連線 9＋3＋8 個全過。375px 無橫向溢出。
 
 ### 併吞／競標系統（其他人開發中）— 整合約定
