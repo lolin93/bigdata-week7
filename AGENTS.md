@@ -25,6 +25,29 @@
 - 使用者回答設計問題不等於同意開工；要等使用者明確說「做」才動手改檔。
 - 使用者明確要求時才 commit / push。
 
+## 分支與協作（2026-10-21 使用者決定）
+
+```
+main（原作品，作業 PR 的 base，不動）
+  └─ feature/my-improvement（目前成果，GitHub Pages 從這裡部署）
+       ├─ feature/merger（併吞系統）
+       └─ feature/<其他功能>
+```
+
+- `main`：不要改，也不要把任何分支合併或快轉進去（原因見下方「線上展示」）。
+- `feature/my-improvement`：已完成、驗證過的成果。push 到這裡就會更新線上網站，所以只放測過的東西。
+- 新功能：從 `feature/my-improvement` 開分支，不要從 `main` 開（`main` 沒有房間功能），命名 `feature/<功能名>`。完成後開 PR，**base 選 `feature/my-improvement`**，使用者看過差異再合併。
+- 沒有這個 Repo 寫入權限的人：先 Fork `soymilk0211/bigdata-week7`，在自己的 Fork 開分支，再開 PR 到這個 Repo 的 `feature/my-improvement`。
+- 合併前的多裝置測試：網站只部署 `feature/my-improvement`，新分支不會自動上線。要用多支手機測時，在自己的 Fork 開 GitHub Pages，指向自己的分支，就有自己的測試網址。`node serve.mjs` 只監聽 `127.0.0.1`，只能在同一台電腦開頁籤測試。
+- 同一個房間的人要開同一個網址，用邀請連結最保險。所有網站版本共用 PeerJS 公用伺服器和同一個房間代碼前綴，不同版本的頁面也可能連進同一個房間，但遊戲狀態可能不相容。之後如果改了房間訊息或 `state` 的格式（例如併吞系統），要把 `room.js` 的 `ROOM_PREFIX` 版本號往上加（`econboard-v1-` → `econboard-v2-`），讓新舊版本進不了同一個房間。
+- `claude/room-connection-timeout-l24xbb` 是 Claude Code 工作用的分支，內容和 `feature/my-improvement` 相同，其他人不用理它。
+
+給測試者的步驟（線上網址 <https://soymilk0211.github.io/bigdata-week7/>）：
+1. 每個人用自己的裝置打開網址；同一支手機開兩個頁籤不行。
+2. 房主按「開始遊戲」，再按「多裝置房間」→「建立房間」→「複製邀請連結」傳給大家。
+3. 其他人打開邀請連結按「加入」，各選一位玩家並確認；坐滿後開始。
+4. 房主頁面要開在最前面（不要鎖螢幕或切 App）。
+
 ## 目前進度（2026-10-21）
 
 ### 線上展示
