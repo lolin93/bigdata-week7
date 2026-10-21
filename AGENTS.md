@@ -41,7 +41,7 @@ main（原作品，作業 PR 的 base，不動）
 - 合併前的多裝置測試：網站只部署 `feature/my-improvement`，新分支不會自動上線。要用多支手機測時，在自己的 Fork 開 GitHub Pages，指向自己的分支，就有自己的測試網址。`node serve.mjs` 只監聽 `127.0.0.1`，只能在同一台電腦開頁籤測試。
 - 同一個房間的人要開同一個網址，用邀請連結最保險。所有網站版本共用 PeerJS 公用伺服器和同一個房間代碼前綴，不同版本的頁面也可能連進同一個房間，但遊戲狀態可能不相容。之後如果改了房間訊息或 `state` 的格式（例如併吞系統），要把 `room.js` 的 `ROOM_PREFIX` 版本號往上加（目前是 `econboard-v2-`，下次改成 `econboard-v3-`），讓新舊版本進不了同一個房間。
 - `claude/room-connection-timeout-l24xbb` 是 Claude Code 工作用的分支，內容和 `feature/my-improvement` 相同，其他人不用理它。
-- 給人看的協作步驟寫在 README 的「一起開發（給協作者）」，兩邊要一致；改其中一邊時另一邊也要更新。
+- 協作說明只寫在 AGENTS.md，README 不放（使用者決定，2026-10-21）。
 - 權限：協作者由使用者在 GitHub 的 Settings → Collaborators 加入；沒有權限的人用 Fork。AI 助手不能也不要替使用者改 Repo 設定。
 - 分工：開工前要先說明要做的功能和會改的檔案，避免多人同時大改 `app.js`。
 - 送 PR 前：跑 `node build.mjs`（`game.js`、`index.html` 和來源檔一起提交）和 `node --test`（全過）；PR 說明要寫改了什麼、怎麼測的。動到多人連線就要用兩台裝置（或兩個瀏覽器視窗）實際走一次「建房 → 選企業 → 開始 → 玩完一季」，並確認遊戲狀態在每一步都還在（不要只檢查 `phase`，`state` 變成 `null` 時也會通過）。
