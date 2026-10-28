@@ -4,64 +4,103 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#111b28">
-  <title>經濟棋局｜多人財經桌遊</title>
-  <link rel="stylesheet" href="./styles.css?v=e814c32a">
+  <title>經濟棋局｜併購派對</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./party-ext.css">
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand"><div id="round-badge" class="round-badge" hidden><span>目前季數</span><strong id="round-number">01</strong><small id="round-limit"></small></div><div><strong>經濟棋局</strong><small>ECONOMY BOARD GAME</small></div></div>
-      <div class="top-actions"><span id="save-status" class="save-status">本機自動儲存</span><button id="room-chip" class="room-chip" type="button" hidden></button><button id="home-btn" class="quiet" type="button">首頁</button><button id="room-btn" class="quiet" type="button">多人連線</button><button id="open-tab-btn" class="quiet host-only single-only" type="button">開啟同步頁籤</button><button id="export-btn" class="quiet host-only" type="button">匯出存檔</button><label class="quiet file-btn host-only single-only">匯入存檔<input id="import-file" type="file" accept="application/json,.json" hidden></label><button id="new-game-btn" class="quiet host-only" type="button">新遊戲</button></div>
+      <div class="brand"><div id="round-badge" class="round-badge" hidden><span>目前季數</span><strong id="round-number">01</strong><small id="round-limit"></small></div><div><strong>經濟棋局</strong><small>MERGER PARTY · 併購派對</small></div></div>
+      <div class="top-actions"><span id="save-status" class="save-status">本機自動儲存</span><button id="home-btn" class="quiet" type="button">首頁</button><button id="open-tab-btn" class="quiet" type="button">開啟同步頁籤</button><button id="export-btn" class="quiet" type="button">匯出存檔</button><label class="quiet file-btn">匯入存檔<input id="import-file" type="file" accept="application/json,.json" hidden></label><button id="new-game-btn" class="quiet" type="button">創建新遊戲</button></div>
     </header>
     <main>
       <section id="home" class="home-page" aria-labelledby="home-title">
         <div class="home-hero">
-          <p class="eyebrow">遊戲玩法</p>
-          <h1 id="home-title">經營企業，<br><em>走出你的經濟棋局。</em></h1>
-          <p>2–8 位玩家輪流玩。每人選一家企業，走棋盤、抽事件、做經營決定，想辦法提高自己的淨資產。</p>
-          <div class="home-actions"><button id="home-play-btn" class="primary" type="button">一台裝置輪流玩 →</button><button id="home-room-btn" class="secondary" type="button">多人連線（每人一台）→</button></div>
-          <p id="home-status" class="home-status">一台裝置大家輪流操作，或每個人用自己的手機連線。</p>
+          <p class="eyebrow">2–8 人派對棋盤</p>
+          <h1 id="home-title">擲出骰子，<br><em>買下整座棋盤。</em></h1>
+          <p>輪流丟 骰子、踩格賺總資產、抽道具、放技能，再用併購星把對手變成你的子公司。先拿到 3 顆星的人，就是這場派對的贏家。</p>
+          <button id="home-play-btn" class="primary" type="button">設定玩家，開始派對 →</button>
+          <p id="home-status" class="home-status">一台電腦就能開始，大家輪流操作。</p>
         </div>
         <div class="home-guide" aria-label="玩法步驟">
-          <div class="home-step"><span>01</span><div><h2>選玩家和企業</h2><p>選 2–8 位玩家，每人選不同的企業。開局時也能調整淨資產目標和最多季數。</p></div></div>
-          <div class="home-step"><span>02</span><div><h2>拉霸，走棋盤</h2><p>輪到你時，啟動兩個數字的拉霸。每個轉輪會停在 0–6，兩數相加就是前進格數。總和為 0 時原地停留。罷工幽靈每回合會換位置；如果走到幽靈格，剩餘步數作廢，本季收入歸零、支出照付，這回合不能抽卡或經營。</p></div></div>
-          <div class="home-step"><span>03</span><div><h2>停格後點卡抽事件</h2><p>沒有遇到罷工幽靈時，停在事件格就點擊棋盤中央流動的卡片，事件才會翻開。全球事件影響所有適用企業；個人事件只影響你；產業事件影響同產業的企業。事件可能持續好幾季。</p></div></div>
-          <div class="home-step"><span>04</span><div><h2>經營你的企業</h2><p>看完事件卡，按「繼續經營」，棋盤中央就會顯示你這種企業的經營提示。你可以聘僱或裁員，也可以借款或還款；看過收入、成本和淨資產後，再交給下一位玩家。</p></div></div>
-          <div class="home-step"><span>05</span><div><h2>結算一季，決定勝負</h2><p>所有玩家都完成後，遊戲結算一季。若聯準會調整政策，新一季會在棋盤中央播報快報。有人達到淨資產目標、有人破產，或到達季數上限時，對局就會結束。達標者獲勝；若無人達標，未破產且淨資產最高的玩家獲勝。</p></div></div>
-          <p class="home-formula">淨資產 ＝ 現金 ＋ 投資資產 − 借款</p>
+          <div class="home-step"><span>01</span><div><h2>丟 骰子前進</h2><p>每回合丟一顆六面骰，點數 1–6。骰子會旋轉 1–2 秒再停定，棋子逐格前進；集齊四角記號後經過出發點可領 1,000 元補助，領取後記號重置。</p></div></div>
+          <div class="home-step"><span>02</span><div><h2>踩格賺總資產與能量</h2><p>藍色發財格賺 300、紅色蕭條格扣 150、黃色技能格補 1 點能量、綠色事件格抽即時事件。只有踩在灰色斜線的罷工幽靈格，才會扣 1,000 總資產並沒收 1 個道具。</p></div></div>
+          <div class="home-step"><span>03</span><div><h2>用道具干擾對手</h2><p>每回合開始自動抽 1 個道具，普通與神話道具共用 3 格；滿了必須先丟棄。丟骰前可無限次使用：護盾、123／456 骰子、移形換位、開槓桿。</p></div></div>
+          <div class="home-step"><span>04</span><div><h2>發動企業專屬技能</h2><p>每家企業都有獨特技能，消耗 1 點能量。做空、鎖步、專利訴訟、關稅壁壘、限電、炒地皮，全部都能直接干擾對手。</p></div></div>
+          <div class="home-step"><span>05</span><div><h2>買星、併購、拿下勝利</h2><p>用 1,000 總資產買 1 顆併購星，先拿到 3 顆立刻獲勝。總資產滿 2,000 可併購對手，讓他成為每回合上繳 40% 收益的子公司；子公司存到 1,000 也能獨立反撲。</p></div></div>
+          <p class="home-formula">3 顆併購星直接獲勝　·　季數上限時：星數 → 總資產</p>
         </div>
         <section class="home-roles" aria-labelledby="home-roles-title">
           <div class="home-roles-heading">
-            <p class="eyebrow">選擇你的角色</p><h2 id="home-roles-title">十種企業，各有一盤生意</h2>
+            <p class="eyebrow">選擇你的角色</p><h2 id="home-roles-title">十種企業，十種派對玩法</h2>
           </div>
           <details class="home-roles-disclosure">
-            <summary>點開查看十種企業的故事與收支 <span aria-hidden="true">⌄</span></summary>
+            <summary>點開查看十種企業與專屬技能 <span aria-hidden="true">⌄</span></summary>
             <div class="home-roles-content">
-              <p>以下是開局、尚無事件時的每季基準值，單位為遊戲幣。每家起始現金 1,200、投資資產 800。事件、員工調整和聯準會政策會改變實際數字。</p>
+              <p>每位玩家選擇一家企業，開局總資產 2,000、技能能量 1 點。踩到黃色技能格或使用道具都能補充能量，能量用來發動下方專屬技能。</p>
               <div id="home-roles" class="home-role-grid"></div>
             </div>
           </details>
         </section>
       </section>
+
       <div id="setup" class="setup-wrap" hidden>
-        <section class="setup-hero"><p class="eyebrow">一台電腦・輪流遊玩・一回合代表一季</p><h1>啟動你的<br><em>經濟新局。</em></h1><p>選擇企業，啟動兩輪數字拉霸前進，讓事件改寫收入、成本與資產。棋子每秒前進一格；當所有玩家完成行動，市場與聯準會就會結算這一季。</p><div class="setup-notes"><span>24 格經濟棋盤</span><span>10 種企業</span><span>10 條聯準會規則</span></div></section>
-        <section class="setup-card"><div class="section-heading"><div><p class="eyebrow">建立對局</p><h2>設定玩家</h2></div><span class="step-pill">2–8 人</span></div><div id="setup-players"></div><button id="add-player" type="button" class="add-player">＋ 新增玩家</button><div class="setup-options"><label>勝利淨資產目標<input id="target-input" type="number" min="2000" step="500" value="5500"></label><label>最多季數<input id="rounds-input" type="number" min="2" max="50" value="12"></label></div><p class="helper">淨資產 = 現金 + 投資資產 − 借款。達標、玩家破產或季數上限到達時結束。</p><p id="setup-error" class="form-error" role="alert"></p><button id="start-btn" class="primary big" type="button">開始遊戲 <span>→</span></button></section>
+        <section class="setup-hero"><p class="eyebrow">2–8 人・一台電腦輪流玩・一回合代表一季</p><h1>啟動你的<br><em>併購派對。</em></h1><p>選擇企業、設定季數上限，擲出骰子在 24 格經濟版圖上前進。踩格、抽道具、放技能、買星星，把對手的公司一間間收進口袋。</p><div class="setup-notes"><span>24 格動態棋盤</span><span>10 種企業技能</span><span>5 道具 + 8 神話</span><span>2–8 人房間</span></div></section>
+        <section class="setup-card"><div class="section-heading"><div><p class="eyebrow">建立對局</p><h2>設定玩家</h2></div><span class="step-pill">2–8 人</span></div><div id="setup-players"></div><button id="add-player" type="button" class="add-player">＋ 新增玩家</button><p class="helper" id="setup-mode-helper">選擇模式後，數值設定會顯示在下方測試選項旁。</p><p id="setup-error" class="form-error" role="alert"></p><button id="start-btn" class="primary big" type="button">開始派對 <span>→</span></button></section>
       </div>
-      <section id="room-wait" class="room-wait" hidden><p class="eyebrow">MULTI-DEVICE ROOM</p><h1 id="room-wait-title">已加入房間，<br><em>等待房主開局。</em></h1><p id="room-wait-copy">在「多人連線」視窗輸入名字、選一家企業，然後等房主開始遊戲；開始後棋盤會自動出現。</p><button id="room-wait-open" class="primary" type="button">輸入名字、選企業</button></section>
+
       <div id="game" hidden>
-        <nav class="tabs" aria-label="遊戲頁面"><button data-tab="business" class="active">企業經營</button><button data-tab="events">全球事件</button><button data-tab="dashboard">總體經濟儀表板</button><button data-tab="fed">AI 聯準會</button><button data-tab="history">歷史紀錄</button></nav>
-        <section id="tab-business" class="tab-page active"><div class="business-grid"><div class="board-panel panel"><div class="panel-title"><div><p class="eyebrow">BOARD / 棋盤</p><h2>經濟版圖</h2></div><div class="legend"><span><i class="dot global"></i>全球</span><span><i class="dot personal"></i>個人</span><span><i class="dot sector"></i>產業</span><span><i class="ghost-legend" aria-hidden="true">👻</i>罷工</span></div></div><div id="board" class="board" aria-label="24 格棋盤"></div></div><div class="side-stack"><div class="turn-panel panel"><p class="eyebrow">CURRENT TURN</p><div id="turn-content"></div></div><div class="panel mini-panel"><div class="panel-title"><h3>本季市場快照</h3><span class="pill">預估</span></div><div id="mini-economy" class="mini-economy"></div></div><div class="panel goal-panel"><p class="eyebrow">WIN CONDITIONS</p><h3>如何獲勝</h3><p id="goal-copy"></p><div id="goal-progress"></div></div></div><section class="player-area"><div class="section-heading player-heading"><div><p class="eyebrow">PLAYER PORTFOLIOS</p><h2>玩家狀況</h2></div><span class="section-hint">事件效果已計入下方數字</span></div><div id="player-cards" class="player-grid"></div></section></div></section>
-        <section id="tab-events" class="tab-page"><div class="section-heading"><div><p class="eyebrow">EVENT TIMELINE</p><h2>作用中的事件</h2></div><span class="section-hint">同一指標先加總，再限制於 −60% 至 +100%</span></div><div id="active-events" class="event-grid"></div><details class="disclosure-panel gap-top"><summary><span><small>CARD LIBRARY</small><strong>事件卡圖鑑</strong></span><i aria-hidden="true">⌄</i></summary><div id="event-library" class="library disclosure-content"></div></details></section>
-        <section id="tab-dashboard" class="tab-page"><div class="section-heading"><div><p class="eyebrow">MACROECONOMIC DASHBOARD</p><h2>總體經濟儀表板</h2><p class="muted">結算快照與聯準會判斷共用相同數據。預估值尚未用於政策決策。</p></div><label class="select-label">查看季數<select id="snapshot-select"></select></label></div><div id="dashboard-body"></div></section>
-        <section id="tab-fed" class="tab-page"><div class="section-heading"><div><p class="eyebrow">RULE-BASED FED</p><h2>AI 聯準會</h2><p class="muted">每季結算後檢查十條規則，優先序最高的政策於下一季生效。</p></div></div><div id="fed-body"></div></section>
-        <section id="tab-history" class="tab-page"><div class="section-heading"><div><p class="eyebrow">SEASON BY SEASON</p><h2>歷史紀錄</h2></div></div><div id="history-body"></div></section>
+        <nav class="tabs" aria-label="遊戲頁面"><button data-tab="board" class="active">派對棋盤</button><button data-tab="rules">規則說明</button></nav>
+        <section id="tab-board" class="tab-page active">
+          <div class="business-grid party-grid">
+            <div class="board-panel panel">
+              <div class="panel-title"><div><p class="eyebrow">BOARD / 派對棋盤</p><h2>併購版圖</h2></div><div class="legend party-legend"><span><i class="dot blue"></i>發財</span><span><i class="dot red"></i>蕭條</span><span><i class="dot yellow"></i>技能</span><span><i class="dot green"></i>事件</span><span><i class="ghost-legend" aria-hidden="true">👻</i>罷工</span></div></div>
+              <div id="board" class="board party-board" aria-label="24 格派對棋盤"></div>
+            </div>
+            <div class="side-stack">
+              <div class="turn-panel panel"><p class="eyebrow">CURRENT TURN</p><div id="turn-content"></div></div>
+              <div class="panel goal-panel"><p class="eyebrow">WIN CONDITIONS</p><h3>如何獲勝</h3><p id="goal-copy"></p><div id="goal-progress"></div></div>
+              <div class="panel log-panel"><div class="panel-title"><h3>最近動態</h3><span class="pill">LIVE</span></div><div id="party-log" class="party-log"></div></div>
+            </div>
+            <section class="player-area"><div class="section-heading player-heading"><div><p class="eyebrow">PLAYER DASHBOARD</p><h2>玩家與子公司</h2></div><span class="section-hint">總資產 · 星數 · 技能能量 · 道具</span></div><div id="player-cards" class="player-grid party-player-grid"></div></section>
+          </div>
+        </section>
+        <section id="tab-rules" class="tab-page">
+          <div class="section-heading"><div><p class="eyebrow">HOW TO PLAY</p><h2>遊戲規則說明</h2><p class="muted">從擲骰到併購，一頁看懂所有新機制。</p></div></div>
+          <div class="rules-grid">
+            <article class="rule-block"><span class="rule-icon">🎲</span><h3>骰子與移動</h3><ul><li>廢除舊版雙輪 0–6 拉霸，改為單顆六面骰，點數 1–6。</li><li>點「擲骰」後方塊旋轉 1–2 秒，停定後棋子逐格移動。</li><li>在地圖四個角落取得所有顏色記號後，經過出發點即可領取1000元補助金，領取後記號將重置。</li><li>123／456 骰子會覆蓋先前的變骰效果；緊縮銀根強制只走 1 格。</li></ul></article>
+            <article class="rule-block"><span class="rule-icon">🧱</span><h3>格子效果</h3><ul><li><b class="tag blue">發財</b>獲得 300 總資產。</li><li><b class="tag red">蕭條</b>扣除 150 營運費。</li><li><b class="tag yellow">技能</b>獲得 1 點技能能量。</li><li><b class="tag green">事件</b>抽即時事件：全體 +400、全體 −200、個人補助等。</li><li><b class="tag ghost">幽靈</b>只有「踩在幽靈格」才觸發：直接扣 1,000 總資產並隨機沒收 1 個道具；幽靈格顯示灰色斜線，滑鼠移上去可看效果。</li></ul></article>
+            <article class="rule-block"><span class="rule-icon">🛡️</span><h3>道具系統</h3><p>每回合開始自動抽 1 個道具，普通道具與黑市神話道具共用 3 格；滿了必須先丟棄才能取得新道具。擲骰前可無限次使用，點擊即發動並消耗；道具欄旁的 🗑️ 可直接丟棄。</p><div id="rules-items" class="rules-items"></div></article>
+            <article class="rule-block"><span class="rule-icon">⭐</span><h3>勝利條件</h3><ul><li><b>企業之星</b>：起步後每次經過或停留在起點格，都能購買星星；每賣出 1 顆星星，起點星價就上漲。任意玩家獲得 3 顆星會在當季結算，星數最高者獲勝。</li><li><b>首富競爭</b>：總資產率先達到 8,000 獲勝；季數過半通膨 ×2，倒數兩季 ×4。</li><li><b>邪惡企業</b>：每 5 季毀滅日收保護費，付不出來化為藍色罷工幽靈，最後存活者獲勝；保護費每次收取後都會漲價。</li><li>企業之星／首富競爭第一名平手時觸發驟死賽：憤怒幽靈移動 ×1.5、扣錢 ×2。</li></ul></article>
+            <article class="rule-block wide"><span class="rule-icon">🎮</span><h3>模式與連線大廳</h3><ul><li>建立對局可選企業之星、首富競爭、邪惡企業或隨機模式；隨機模式開局從三種模式中抽一種，並套用固定預設數值。</li><li>多人房間以 6 碼房間代碼建立；大廳可選 10 家企業或「未定新創集團 🎲」，後者開局隨機分配企業。</li><li>支援 2–8 人；WebRTC DataChannel 為主，同瀏覽器與 HTTP 伺服器另有備援通道。</li><li>結算後每位玩家按「確認結果」，畫面顯示等待確認比例（例如 2/8）；全員確認後統一回到同一個大廳。</li></ul></article>
+            <article class="rule-block wide"><span class="rule-icon">🗺️</span><h3>動態地圖與特殊格</h3><ul><li>每局隨機生成 24 格；黑市 ×3、投資 ×2、查稅局 ×1、內線交易 ×1，所有特殊格絕對不相鄰。</li><li><b>黑市</b>：神話道具起標 1,000，每次抬價 250，輪流詢問到最後一人得標。</li><li><b>投資</b>：投入 50% 總資產換股票憑證；季末大牛市 3 倍（10%）、平穩期 1.5 倍（40%）、龐氏騙局歸零（50%）。</li><li><b>查稅局</b>：繳 50% 總資產，或接受 2 回合羈押；贖罪券可全額抵銷稅金。</li><li><b>內線交易</b>：花 100 轉命運輪盤，用完變回普通格並在別的普通格重生。</li></ul></article>
+            <article class="rule-block wide"><span class="rule-icon">🗿</span><h3>八款神話道具</h3><p>黑市限定，部分道具受模式限制；被動道具會自動觸發。</p><div id="rules-mythics" class="rules-items"></div></article>
+            <article class="rule-block wide"><span class="rule-icon">🤔</span><h3>六種隨機快速決策</h3><p>每次停在普通格後抽一則二選一情境，立刻生效；總資產不足的選項會自動鎖定。</p><div id="rules-decisions" class="rules-items"></div></article>
+            <article class="rule-block wide"><span class="rule-icon">⚡</span><h3>十大企業專屬技能</h3><p>技能限自己回合、擲骰前發動，每次消耗 1 點能量。被護盾擋下時效果歸零。</p><div id="rules-skills" class="rules-skills"></div></article>
+            <article class="rule-block wide"><span class="rule-icon">🤝</span><h3>惡意併購與傀儡子公司</h3><ul><li>總資產滿 2,000 可併購一位對手；若目標總資產為負，收購價降為 1,000。雙方總資產都為負時，可發動 0 元代價的負債反噬併購。</li><li>被併購者不會淘汰，成為「子公司」，每回合收益的 40% 自動上繳母公司。每位母公司同時只能有一家子公司。</li><li>子公司總資產存到 1,000，可在自己回合花 1,000 發動「獨立反撲」脫離控制。</li><li>已達 3 顆星的玩家不能被併購。</li></ul></article>
+            <article class="rule-block wide"><span class="rule-icon">💾</span><h3>存檔與連線</h3><ul><li>遊戲自動存到瀏覽器，維持原本的「匯出存檔／匯入存檔」功能；存檔包含總資產、星數、能量、道具、護盾、子公司與所有狀態。</li><li>同一瀏覽器開啟相同網址的多個頁籤會即時同步；也可按右上角「開啟同步頁籤」。</li><li>第 1 版財務存檔可直接匯入，系統會自動轉換為派對棋盤並保留玩家總資產。</li></ul></article>
+          </div>
+        </section>
       </div>
     </main>
-    <footer><span>經濟棋局 · 所有數字皆為遊戲假設 · <span id="app-version">版本 e814c32a</span></span><span>同一瀏覽器開啟相同網址可同步對局，各頁籤可查看不同儀表</span></footer>
+    <footer><span>經濟棋局 · 併購派對 · 所有數字皆為遊戲假設</span><span>同一瀏覽器開啟相同網址可同步對局，各頁籤可查看不同畫面</span></footer>
   </div>
-  <div id="card-modal" class="modal" hidden><div class="modal-backdrop" data-close-modal></div><div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button class="modal-close" data-close-modal aria-label="關閉">×</button><p id="modal-kicker" class="eyebrow"></p><div class="modal-icon">✦</div><h2 id="modal-title"></h2><p id="modal-target"></p><div id="modal-effects"></div><button class="primary" data-close-modal>繼續經營 →</button></div></div>
-  <div id="room-modal" class="modal" hidden><div class="modal-backdrop" data-close-room></div><div class="modal-card room-card" role="dialog" aria-modal="true" aria-labelledby="room-title"><button class="modal-close" type="button" data-close-room aria-label="關閉">×</button><div id="room-body"></div></div></div>
+
+  <div id="party-modal" class="modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <button id="modal-close" class="modal-close" data-close-modal aria-label="關閉">×</button>
+      <p id="modal-kicker" class="eyebrow"></p>
+      <div id="modal-icon" class="modal-icon">✦</div>
+      <h2 id="modal-title"></h2>
+      <p id="modal-text"></p>
+      <div id="modal-body"></div>
+      <div id="modal-actions" class="modal-actions"></div>
+    </div>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script defer src="./game.js?v=e814c32a"></script>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script defer src="./game.js"></script>
 </body>
 </html>

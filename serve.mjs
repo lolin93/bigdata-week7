@@ -1,23 +1,61 @@
 import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
+import {readFile, stat} from 'node:fs/promises';
+import {extname, join, normalize, sep} from 'node:path';
+import {fileURLToPath} from 'node:url';
 
-const assets=new Map([
-  ['/', ['index.html','text/html; charset=utf-8']],
-  ['/index.html', ['index.html','text/html; charset=utf-8']],
-  ['/styles.css', ['styles.css','text/css; charset=utf-8']],
-  ['/game.js', ['game.js','text/javascript; charset=utf-8']]
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const PORT = Number(process.env.PORT) || 4173;
+const HOST = process.env.HOST || '127.0.0.1';
+
+const MIME = new Map([
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.svg', 'image/svg+xml'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.webp', 'image/webp'],
+  ['.ico', 'image/x-icon'],
+  ['.woff2', 'font/woff2'],
+  ['.mp3', 'audio/mpeg'],
+  ['.wav', 'audio/wav']
 ]);
-const port=4173;
 
-createServer(async(req,res)=>{
-  if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return}
-  let path;
-  try{path=new URL(req.url,'http://127.0.0.1').pathname}catch{res.writeHead(400);res.end();return}
-  const asset=assets.get(path);
-  if(!asset){res.writeHead(404);res.end();return}
-  try{
-    const body=await readFile(new URL(asset[0],import.meta.url));
-    res.writeHead(200,{'Content-Type':asset[1],'Cache-Control':'no-store'});
-    res.end(req.method==='HEAD'?undefined:body);
-  }catch{res.writeHead(500);res.end()}
-}).listen(port,'127.0.0.1',()=>console.log(`經濟棋局：http://127.0.0.1:${port}/`));
+async function serveStatic(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
+  let pathname;
+  try { pathname = decodeURIComponent(url.pathname); } catch { res.writeHead(400); res.end(); return; }
+  if (pathname === '/' || pathname === '') pathname = '/index.html';
+  const target = normalize(join(ROOT, pathname));
+  if (!target.startsWith(ROOT.endsWith(sep) ? ROOT : ROOT + sep)) { res.writeHead(403); res.end(); return; }
+  let info;
+  try { info = await stat(target); } catch { res.writeHead(404); res.end(); return; }
+  if (info.isDirectory()) { res.writeHead(404); res.end(); return; }
+  const type = MIME.get(extname(target).toLowerCase()) || 'application/octet-stream';
+  try {
+    const body = await readFile(target);
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': body.length,
+      'Cache-Control': 'no-store'
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+  } catch { res.writeHead(500); res.end(); }
+}
+
+const server = createServer(async (req, res) => {
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`); }
+  catch { res.writeHead(400); res.end(); return; }
+  try {
+    await serveStatic(req, res, url);
+  } catch (err) {
+    if (!res.writableEnded) { res.writeHead(500); res.end(); }
+  }
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`派對大富翁：http://${HOST}:${PORT}/`);
+});

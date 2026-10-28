@@ -1,268 +1,755 @@
-import {investmentValue,investmentEvent} from './investment.js';
-import {auctionBonus} from './auction.js';
-import {METRICS,ROLES,GLOBAL_EVENTS,PERSONAL_EVENTS,SECTOR_EVENTS,ALL_EVENTS,FED_RULES,FED_PRIORITY,BOARD} from './data.js';
+import {ROLES,ITEMS,BOARD,PARTY_EVENTS,DECISION_OPTIONS,SECTORS,ITEM_CHANCE,STAR_COST,STAR_GOAL,ACQUIRE_COST,ACQUIRE_DISCOUNT_COST,REBEL_COST,START_CASH} from './data.js';
 
-const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
-const round2=n=>Math.round((n+Number.EPSILON)*100)/100;
-const div=(a,b)=>b===0||b==null?null:a/b;
-const pct=(a,b)=>{const x=div(a,b);return x===null?null:100*(x-1)};
-const roleById=id=>ROLES.find(r=>r.id===id);
-const eventById=id=>ALL_EVENTS.find(e=>e.id===id);
-const nextRandom=state=>{let x=state.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.rng=x|0;return (x>>>0)/4294967296};
+// 擴充掛鉤：party_engine.js 會註冊這些回呼，原始規則完全保留。
+export const engineHooks={};
+export function boardOf(state){return Array.isArray(state?.board)&&state.board.length?state.board:BOARD}
+
+export const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+export const round2=n=>Math.round((n+Number.EPSILON)*100)/100;
+export const roleById=id=>ROLES.find(r=>r.id===id);
+export const itemById=id=>ITEMS.find(x=>x.id===id);
+const eventById=id=>PARTY_EVENTS.find(e=>e.id===id);
+export const nextRandom=state=>{let x=state.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.rng=x|0;return (x>>>0)/4294967296};
+export const pick=(state,items)=>items[Math.floor(nextRandom(state)*items.length)];
 const ghostSeed=seed=>((Number(seed)|0)^0x6d2b79f5)||1;
 const nextGhostRandom=state=>{let x=state.ghostRng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.ghostRng=x|0;return (x>>>0)/4294967296};
-function ensureGhostState(state){
+const currentPlayer=state=>state.players[state.turnIndex];
+
+export function log(state,text){state.log.unshift(`第 ${state.round} 季｜${text}`);if(state.log.length>200)state.log.length=200}
+
+export function ensureGhostState(state){
   if(!Number.isInteger(state.ghostRng)||state.ghostRng===0)state.ghostRng=ghostSeed(state.seed);
   if(!Number.isInteger(state.ghostPosition)||state.ghostPosition<0||state.ghostPosition>=BOARD.length)state.ghostPosition=1+Math.floor(nextGhostRandom(state)*(BOARD.length-1));
   if(!Array.isArray(state.ghostTrail))state.ghostTrail=[];
-  if(!Array.isArray(state.struckPlayerIds))state.struckPlayerIds=[];
 }
-function moveGhost(state){
+
+export const CORNER_MARKS={0:'red',6:'green',12:'yellow',18:'blue'};
+const EMPTY_CORNER_MARKS=()=>({red:false,green:false,blue:false,yellow:false});
+
+export function applyCornerProgress(state,player,path,{passedStart=false,effects=null}={}){
+  if(!player)return null;
+  const marks=player.marks&&typeof player.marks==='object'?player.marks:{};
+  player.marks={red:marks.red===true,green:marks.green===true,blue:marks.blue===true,yellow:marks.yellow===true};
+  const colors=[];
+  for(const index of path||[]){
+    const color=CORNER_MARKS[index];
+    if(color&&!player.marks[color]){
+      player.marks[color]=true;
+      colors.push(color);
+      log(state,`📍 ${player.name} 取得${color==='red'?'紅色':color==='green'?'綠色':color==='blue'?'藍色':'黃色'}角落記號。`);
+      effects?.push({icon:'📍',text:`取得${color==='red'?'紅色':color==='green'?'綠色':color==='blue'?'藍色':'黃色'}角落記號`,tone:'good'});
+    }
+  }
+  if(!passedStart||player.position===0||!Object.values(player.marks).every(Boolean))return null;
+  const previousNoInflation=state.ext?.noInflation;
+  if(state.ext)state.ext.noInflation=true;
+  let amount;
+  try{amount=addCash(state,player,1000)}finally{if(state.ext)state.ext.noInflation=previousNoInflation}
+  player.marks=EMPTY_CORNER_MARKS();
+  const event={type:'cornerSubsidy',playerId:player.id,playerName:player.name,amount,at:Date.now()};
+  state.cornerSubsidyEvent=event;
+  log(state,`🚩 ${player.name} 集齊四角記號，經過出發點領取 1,000 元補助金，記號已清除。`);
+  effects?.push({icon:'🚩',text:'集齊四角記號，領取 1,000 元補助金',tone:'good'});
+  return event;
+}
+
+function ensurePartyState(state){
+  state.version=2;
+  state.mode='party';
+  if(!Array.isArray(state.board)||state.board.length<8)state.board=BOARD.map(t=>({...t}));
+  if(!Number.isInteger(state.round)||state.round<1)state.round=1;
+  if(!Number.isInteger(state.maxRounds)||state.maxRounds<2)state.maxRounds=10;
+  state.starGoal=STAR_GOAL;
+  if(!Array.isArray(state.players))throw Error('存檔缺少玩家資料。');
+  state.turnIndex=clamp(Number(state.turnIndex)||0,0,state.players.length-1);
+  state.rng=Number.isInteger(state.rng)&&state.rng!==0?state.rng:(Number(state.seed)|0)||1;
+  state.effects=state.effects&&typeof state.effects==='object'?state.effects:{};
+  if(!Array.isArray(state.log))state.log=[];
+  if(!state.turnGains||typeof state.turnGains!=='object')state.turnGains={};
+  if(!Array.isArray(state.winnerIds))state.winnerIds=[];
+  if(!state.status)state.status='playing';
+  if(!state.phase)state.phase=state.status==='finished'?'finished':'roll';
+  if(state.status==='finished')state.phase='finished';
+  if(!state.lastRoll)state.lastRoll=null;
+  if(!state.pendingDecision)state.pendingDecision=null;
+  if(!state.pendingLanding||typeof state.pendingLanding!=='object')state.pendingLanding=null;
+  if(!state.cornerSubsidyEvent||typeof state.cornerSubsidyEvent!=='object')state.cornerSubsidyEvent=null;
+  for(const p of state.players){
+    p.cash=Number.isFinite(p.cash)?round2(p.cash):START_CASH;
+    p.stars=Number.isInteger(p.stars)?p.stars:0;
+    p.energy=Number.isInteger(p.energy)?clamp(p.energy,0,9):1;
+    p.shields=Number.isInteger(p.shields)?p.shields:0;
+    p.items=Array.isArray(p.items)?p.items.filter(id=>itemById(id)).slice(0,3):[];
+    const marks=p.marks&&typeof p.marks==='object'?p.marks:{};
+    p.marks={red:marks.red===true,green:marks.green===true,blue:marks.blue===true,yellow:marks.yellow===true};
+    p.position=Number.isInteger(p.position)?p.position:0;
+    p.skipTurns=Number.isInteger(p.skipTurns)?p.skipTurns:0;
+    p.rentTurns=Number.isInteger(p.rentTurns)?p.rentTurns:0;
+    p.rentTo=p.rentTo||null;
+    p.parentId=p.parentId||null;
+    p.leverage=Boolean(p.leverage);
+    p.bankLock=Boolean(p.bankLock);
+    p.noReward=Boolean(p.noReward);
+    p.forcedRed=Boolean(p.forcedRed);
+    p.forcedSteps=['low','high'].includes(p.forcedSteps)?p.forcedSteps:null;
+    if(!Number.isInteger(p.color))p.color=state.players.indexOf(p);
+  }
+  ensureGhostState(state);
+  for(const p of state.players)if(!Number.isFinite(state.turnGains[p.id]))state.turnGains[p.id]=0;
+  return state;
+}
+
+export function createGame({players,seed=Date.now(),maxRounds=10,startingCash=START_CASH}){
+  if(!Array.isArray(players)||players.length<2||players.length>8)throw Error('請選擇 2 至 8 位玩家。');
+  const validRole=id=>engineHooks.roleExists?engineHooks.roleExists(id):Boolean(roleById(id));
+  if(new Set(players.map(p=>p.roleId)).size!==players.length||players.some(p=>!validRole(p.roleId)))throw Error('每位玩家需要不同的企業角色。');
+  const names=players.map(p=>String(p.name||'').trim());
+  if(names.some(n=>!n)||new Set(names).size!==names.length)throw Error('玩家名稱不得空白或重複。');
+  const n=Number(seed),limit=Number(maxRounds),cash=Number(startingCash);
+  if(!Number.isInteger(n))throw Error('亂數種子無效。');
+  if(!Number.isInteger(limit)||limit<2||limit>30)throw Error('季數上限須為 2–30。');
+  if(!Number.isFinite(cash)||cash<0)throw Error('玩家初始總資產須為 0 以上。');
+  const state={version:2,mode:'party',board:BOARD.map(t=>({...t})),net:null,round:1,maxRounds:limit,starGoal:STAR_GOAL,turnIndex:0,phase:'roll',rng:n|0||1,seed:n,
+    players:players.map((p,i)=>({id:`player-${i+1}`,name:names[i],roleId:p.roleId,position:0,color:i,cash:round2(cash),stars:0,energy:1,items:[],marks:EMPTY_CORNER_MARKS(),shields:0,skipTurns:0,rentTo:null,rentTurns:0,parentId:null,leverage:false,bankLock:false,noReward:false,forcedRed:false,forcedSteps:null})),
+    ghostRng:ghostSeed(n),ghostPosition:0,ghostTrail:[],
+    effects:{},turnGains:{},lastRoll:null,pendingDecision:null,pendingLanding:null,
+    log:[],status:'playing',resultReason:null,winnerIds:[],sync:null,ext:null,cornerSubsidyEvent:null};
+  ensureGhostState(state);
+  state.ghostPosition=1+Math.floor(nextGhostRandom(state)*(BOARD.length-1));
+  state.log.unshift(`第 1 季｜派對開始！率先拿下 ${STAR_GOAL} 顆併購星就獲勝。`);
+  startTurn(state);
+  return state;
+}
+
+export function addCash(state,player,amount){
+  if(!amount)return 0;
+  if(engineHooks.adjustCash)amount=engineHooks.adjustCash(state,player,amount);
+  // 全域扣款攔截：贖罪券等被動防禦必須在現金變動前生效，避免先觸發負債淘汰。
+  if(amount<0&&engineHooks.beforeCash){
+    const adjusted=engineHooks.beforeCash(state,player,amount);
+    if(adjusted===false)return 0;
+    if(Number.isFinite(adjusted))amount=adjusted;
+    if(!amount)return 0;
+  }
+  player.cash=round2(player.cash+amount);
+  if(amount>0&&state.turnGains)state.turnGains[player.id]=round2((state.turnGains[player.id]||0)+amount);
+  if(engineHooks.afterCash)engineHooks.afterCash(state,player,amount);
+  return amount;
+}
+
+export function consumeShield(state,target,label){
+  if(target.shields>0){
+    target.shields--;
+    log(state,`🛡️ ${target.name} 的護盾擋下了「${label}」。`);
+    return true;
+  }
+  return false;
+}
+
+export function drawItem(state,player){
+  if(engineHooks.canDrawItem&&!engineHooks.canDrawItem(state,player))return null;
+  if(player.items.length>=3)return null;
+  const item=pick(state,ITEMS);
+  player.items.push(item.id);
+  if(engineHooks.itemAcquired)engineHooks.itemAcquired(state,player,item.id);
+  log(state,`${player.name} 在回合開始抽到道具「${item.icon} ${item.name}」。`);
+  return item;
+}
+
+export function finish(state,reason,winners){
+  if(engineHooks.beforeFinish)engineHooks.beforeFinish(state,reason,winners);
+  state.status='finished';
+  state.phase='finished';
+  state.resultReason=reason;
+  state.winnerIds=winners.map(p=>p.id);
+  state.pendingDecision=null;
+  state.pendingLanding=null;
+  log(state,`🏁 對局結束｜${winners.length?winners.map(p=>p.name).join('、'):'無人'}勝出。`);
+}
+
+export function checkStarWin(state){
+  const leaders=state.players.filter(p=>p.stars>=STAR_GOAL);
+  if(!leaders.length)return false;
+  finish(state,'stars',leaders);
+  return true;
+}
+
+export function moveGhost(state){
+  if(engineHooks.moveGhost)return engineHooks.moveGhost(state);
   const steps=1+Math.floor(nextGhostRandom(state)*3),direction=nextGhostRandom(state)<.5?-1:1;
   const from=state.ghostPosition;
   state.ghostTrail=[from,...Array.from({length:steps},(_,i)=>(from+direction*(i+1)+BOARD.length)%BOARD.length)];
   state.ghostPosition=state.ghostTrail.at(-1);
 }
-const pick=(state,items)=>items[Math.floor(nextRandom(state)*items.length)];
-const hasTarget=(effect,role)=>effect.target==='all'||effect.target==='interest_negative'&&role.base.interest<0||effect.target==='except_technology'&&role.id!=='technology'||effect.target.split(',').includes(role.id);
-const eventAffects=(active,role,state)=>active.scope==='global'||active.scope==='sector'&&active.sector===role.sector||active.scope==='personal'&&state.players.some(p=>p.id===active.ownerId&&p.roleId===role.id);
 
-export function eventRemaining(active,round){const e=eventById(active.eventId);return e?Math.max(0,e.duration-(round-active.startedRound)):0}
-export function effectBreakdown(state,roleId,metric,round=state.round){
-  const role=roleById(roleId);
-  if(!role)return [];
-  return state.activeEvents.flatMap(a=>{
-    const e=eventById(a.eventId),age=round-a.startedRound;
-    if(!e||age<0||age>=e.duration||!eventAffects(a,role,state))return [];
-    return e.effects.filter(f=>f.metric===metric&&hasTarget(f,role)).map(f=>({eventId:e.id,name:e.name,pct:f.pct*e.decay[age],remaining:e.duration-age,scope:a.scope,instanceId:a.instanceId}));
-  });
-}
-export function metricPct(state,roleId,metric,round=state.round){return clamp(effectBreakdown(state,roleId,metric,round).reduce((n,x)=>n+x.pct,0),-60,100)}
-export function assetValue(state,roleId,round=state.round){const c=state.companies[roleId];return round2(c.assetReferenceValue*(1+metricPct(state,roleId,'asset_value',round)/100))+investmentValue(state,roleId)}
-export function financials(state,roleId,round=state.round){
-  const role=roleById(roleId),c=state.companies[roleId],flows={};
-  const d=state.fedRatePercent-4;
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  for(const m of METRICS){
-    const base=role.base[m];
-    if(!base){flows[m]=0;continue}
-    let extra=0;
-    if(m==='interest')extra=(base<0?40:roleId==='bank'?30:0)*d+(base<0?(program==='QE'?-10:program==='QT'?10:0):0);
-    const headFactor=m==='labor'?c.headcount/role.baseHeadcount:1;
-    flows[m]=round2(Math.sign(base)*Math.abs(base)*headFactor*Math.max(0,1+clamp(metricPct(state,roleId,m,round)+extra,-60,100)/100));
+export function startTurn(state){
+  if(state.status!=='playing')return;
+  const p=currentPlayer(state);
+  state.turnGains[p.id]=0;
+  p.leverage=false;
+  p.forcedSteps=null;
+  state.lastRoll=null;
+  state.pendingDecision=null;
+  state.pendingLanding=null;
+  if(p.shields>0){
+    log(state,`🛡️ ${p.name} 的 ${p.shields} 層護盾在回合開始時到期。`);
+    p.shields=0;
   }
-  const ownerId=state.players.find(p=>p.roleId===roleId)?.id;
-  if(round===state.round&&state.struckPlayerIds?.includes(ownerId))for(const m of METRICS)if(flows[m]>0)flows[m]=0;
-  const revenue=flows.revenue,costs=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v<0).reduce((s,[,v])=>s+v,0),otherIncome=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v>0).reduce((s,[,v])=>s+v,0);
-  const bonus=round===state.round&&state.struckPlayerIds?.includes(ownerId)?0:auctionBonus(state,roleId,round,{costs});
-  flows.investment=(flows.investment||0)+bonus;
-  return {flows,revenue,costs:round2(costs),otherIncome:round2(otherIncome+bonus),profit:round2(Object.values(flows).reduce((s,v)=>s+v,0)),assetValue:assetValue(state,roleId,round)};
+  if(engineHooks.startTurn)engineHooks.startTurn(state,p);
+  drawItem(state,p);
+  if(p.rentTo&&p.rentTurns>0){
+    const owner=state.players.find(x=>x.id===p.rentTo);
+    if(owner&&!consumeShield(state,p,'炒地皮租金')){
+      addCash(state,p,-100);
+      addCash(state,owner,100);
+      log(state,`🏗️ ${p.name} 支付 ${owner.name} 100 租金（剩 ${p.rentTurns-1} 回合）。`);
+    }
+    p.rentTurns--;
+    if(p.rentTurns<=0){p.rentTo=null;p.rentTurns=0}
+  }
+  if(p.skipTurns>0){
+    p.skipTurns--;
+    state.phase='skipped';
+    log(state,`⏸️ ${p.name} 的企業暫停行動，這回合直接跳過。`);
+    return;
+  }
+  state.phase='roll';
+  log(state,`${p.name} 的回合開始，請在擲骰前使用道具或企業技能。`);
 }
-export function companyPosition(state,roleId){const c=state.companies[roleId];return {cash:c.cash,assetValue:assetValue(state,roleId),debt:c.debt,netWorth:c.cash+assetValue(state,roleId)-c.debt}}
 
-export function createGame({players,seed=Date.now(),targetWealth=5500,maxRounds=12}){
-  if(!Array.isArray(players)||players.length<2||players.length>8)throw Error('請選擇 2 至 8 位玩家。');
-  if(new Set(players.map(p=>p.roleId)).size!==players.length||players.some(p=>!roleById(p.roleId)))throw Error('每位玩家需要不同的企業角色。');
-  const names=players.map(p=>String(p.name||'').trim());
-  if(names.some(n=>!n)||new Set(names).size!==names.length)throw Error('玩家名稱不得空白或重複。');
-  const n=Number(seed),goal=Number(targetWealth),limit=Number(maxRounds);
-  if(!Number.isInteger(n)||!Number.isFinite(goal)||goal<2000||!Number.isInteger(limit)||limit<2||limit>50)throw Error('種子、目標或回合上限無效。');
-  const state={version:1,round:1,turnIndex:0,phase:'roll',rng:n|0||1,seed:n,players:players.map((p,i)=>({id:`player-${i+1}`,name:names[i],roleId:p.roleId,position:0,color:i})),companies:Object.fromEntries(ROLES.map(r=>[r.id,{cash:1200,assetReferenceValue:800,headcount:r.baseHeadcount,debt:0}])),activeEvents:[],eventSerial:0,bank:{liquidAssets:300,shortTermLiabilities:1000,totalLoans:1000,nonperformingLoans:40,rescues:[],riskRestrictionUntil:0},initialStockIndex:100,initialTotalLoans:1000,fedRatePercent:4,lastRateDecisionRound:null,monetaryProgram:null,economicHistory:[],evaluations:[],decisions:[],log:[],dice:null,reels:null,lastDraw:null,targetWealth:goal,maxRounds:limit,status:'playing',winnerIds:[]};
-  ensureGhostState(state);
-  return state;
-}
-
-export function drawForTile(state,tile,ownerId){
-  let event,scope=tile.type,sector=null;
-  if(scope==='global')event=pick(state,GLOBAL_EVENTS);
-  else if(scope==='personal')event=pick(state,PERSONAL_EVENTS);
-  else if(scope==='sector'){
-    const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];
-    const index=Math.floor((BOARD.indexOf(tile)-3)/3);
-    sector=sectors[((index%sectors.length)+sectors.length)%sectors.length];
-    event=SECTOR_EVENTS.find(e=>e.sector===sector);
-  } else return null;
-  const active={instanceId:++state.eventSerial,eventId:event.id,scope,sector,ownerId:scope==='personal'?ownerId:null,startedRound:state.round};
-  state.activeEvents.push(active);
-  state.lastDraw=active;
-  state.log.unshift(`第 ${state.round} 季｜${state.players.find(p=>p.id===ownerId)?.name||'玩家'}抽到「${event.name}」${scope==='global'?'，影響所有適用企業':scope==='sector'?`，影響${sector}`:'，只影響自己'}。`);
-  return active;
-}
+export function currentOf(state){return currentPlayer(state)}
 export function movementPath(from,steps,length=BOARD.length){
   if(!Number.isInteger(from)||!Number.isInteger(steps)||!Number.isInteger(length)||from<0||from>=length||steps<0||steps>length||length<2)throw Error('棋盤移動參數無效。');
   return Array.from({length:steps},(_,i)=>(from+i+1)%length);
 }
-export function rollDice(state,forced){
-  if(state.status!=='playing'||state.phase!=='roll')throw Error('現在無法啟動拉霸。');
-  const player=state.players[state.turnIndex];
-  const reels=forced??Array.from({length:2},()=>Math.floor(nextRandom(state)*7));
-  if(!Array.isArray(reels)||reels.length!==2||reels.some(n=>!Number.isInteger(n)||n<0||n>6))throw Error('拉霸須有兩個 0–6 的數字。');
-  const dice=reels.reduce((sum,n)=>sum+n,0),old=player.position,fullPath=movementPath(old,dice);
-  const ghostStep=fullPath.indexOf(state.ghostPosition),struck=ghostStep!==-1;
-  const path=struck?fullPath.slice(0,ghostStep+1):fullPath;
-  player.position=path.at(-1)??old;
-  state.lastDraw=null;
-  state.log.unshift(`${player.name}拉出 ${reels.join(' + ')} = ${dice}，${dice===0?'停留原地':struck?`原預計前進 ${dice} 格，遇罷工實際前進 ${path.length} 格`:`前進 ${dice} 格`}。`);
-  if(struck){state.struckPlayerIds.push(player.id);state.log.unshift(`${player.name}走到第 ${player.position} 格撞上罷工幽靈！剩餘步數作廢，本季收入歸零、支出照付，失去這次經營與抽卡機會。`)}
-  if(old+dice>=BOARD.length&&!struck){state.companies[player.roleId].cash+=250;state.log.unshift(`${player.name}經過起點，獲得 250 遊戲幣。`)}
-  state.dice=dice;state.reels=[...reels];
-  const tile=BOARD[player.position];
-  state.phase=struck?'strike':dice>0&&tile.type!=='start'?'draw':'manage';
-  return {dice,reels:[...reels],tile,path,from:old,struck};
-}
-export function drawEvent(state){
-  if(state.status!=='playing'||state.phase!=='draw')throw Error('現在不需要抽卡。');
-  const player=state.players[state.turnIndex],tile=BOARD[player.position];
-  if(!state.dice||tile.type==='start')throw Error('目前停格沒有事件卡。');
-  const before=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
-  const active=drawForTile(state,tile,player.id);
-  const after=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
-  investmentEvent(state,before,after,eventById(active.eventId)?.name||'市場事件');
-  state.phase='manage';
-  return active;
-}
-export function adjustStaff(state,playerId,delta){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段調整員工。');
-  if(!Number.isInteger(delta)||delta===0)throw Error('請輸入非零整數人數。');
-  const p=state.players[state.turnIndex],c=state.companies[p.roleId];
-  const employed=Object.values(state.companies).reduce((s,x)=>s+x.headcount,0);
-  if(c.headcount+delta<0||employed+delta>1000)throw Error('超出可聘僱或可裁員人數。');
-  c.headcount+=delta;state.log.unshift(`${p.name}${delta>0?'聘僱':'裁員'} ${Math.abs(delta)} 人。`);
-}
-export function issueLoan(state,playerId,amount){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段借款。');
-  if(!Number.isInteger(amount)||amount<=0||amount>state.bank.liquidAssets||state.bank.riskRestrictionUntil>=state.round)throw Error('借款金額超出銀行流動資產，或目前限制新增風險放款。');
-  const c=state.companies[state.players[state.turnIndex].roleId];c.cash+=amount;c.debt+=amount;state.bank.liquidAssets-=amount;state.bank.totalLoans+=amount;state.log.unshift(`${state.players[state.turnIndex].name}借款 ${amount}；現金及負債同步增加。`);
-}
-export function repayLoan(state,playerId,amount){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段還款。');
-  const c=state.companies[state.players[state.turnIndex].roleId];
-  if(!Number.isInteger(amount)||amount<=0||amount>c.debt||amount>c.cash)throw Error('還款不能超過現金或未償債務。');
-  c.cash-=amount;c.debt-=amount;state.bank.liquidAssets+=amount;state.bank.totalLoans-=amount;state.log.unshift(`${state.players[state.turnIndex].name}償還 ${amount} 借款。`);
-}
-export function updateBadLoans(state,playerId,amount){
-  const p=state.players[state.turnIndex];
-  if(state.status!=='playing'||state.phase!=='manage'||p.id!==playerId||p.roleId!=='bank')throw Error('只有銀行玩家能在自己的回合調整壞帳。');
-  if(!Number.isInteger(amount)||amount===0||state.bank.nonperformingLoans+amount<0||state.bank.nonperformingLoans+amount>state.bank.totalLoans)throw Error('壞帳調整超出範圍。');
-  state.bank.nonperformingLoans+=amount;state.log.unshift(`銀行${amount>0?'認列':'收回'} ${Math.abs(amount)} 壞帳。`);
-}
 
-function marketShock(state,round){
-  const sum=state.activeEvents.filter(a=>a.scope==='global').reduce((total,a)=>{
-    const e=eventById(a.eventId),age=round-a.startedRound;
-    return total+(e&&age>=0&&age<e.duration?e.effects.filter(f=>f.metric==='asset_value').reduce((s,f)=>s+f.pct*e.decay[age],0):0);
-  },0);
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  return clamp(sum+(program==='QE'?5:program==='QT'?-5:0),-60,100);
-}
-export function makeSnapshot(state,round=state.round){
-  const prev=state.economicHistory.at(-1)||null,ago3=state.economicHistory.find(x=>x.round===round-3)||null;
-  const f=ROLES.map(r=>financials(state,r.id,round));
-  const sumMetric=m=>f.reduce((s,x)=>s+Math.abs(x.flows[m]),0),sumBase=m=>ROLES.reduce((s,r)=>s+Math.abs(r.base[m]),0);
-  const energyChangePct=pct(sumMetric('energy'),sumBase('energy'));
-  const materialChangePct=pct(sumMetric('material'),sumBase('material'));
-  const inflationPct=2+.08*energyChangePct+.06*materialChangePct;
-  const revenueTotal=f.reduce((s,x)=>s+x.revenue,0),employed=Object.values(state.companies).reduce((s,c)=>s+c.headcount,0),unemployed=1000-employed;
-  const stockIndex=100*(1+marketShock(state,round)/100);
-  const priorStock=prev?.stockIndex??100;
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  const cooldown=state.lastRateDecisionRound===null?0:Math.max(0,3-(round-state.lastRateDecisionRound));
-  const stock3=ago3?.stockIndex??(round===3?state.initialStockIndex??100:null),loans3=ago3?.totalLoans??(round===3?state.initialTotalLoans??1000:null);
-  return {round,inflationPct,previousInflationPct:prev?.inflationPct??null,energyChangePct,materialChangePct,revenueTotal,previousRevenueTotal:prev?.revenueTotal??null,growthPct:prev?pct(revenueTotal,prev.revenueTotal):null,previousGrowthPct:prev?.growthPct??null,laborForce:1000,employed,unemployed,unemploymentPct:unemployed/10,previousUnemploymentPct:prev?.unemploymentPct??null,stockIndex,previousStockIndex:priorStock,stockIndex3Ago:stock3,stockReturn1Pct:pct(stockIndex,priorStock),stockReturn3Pct:stock3===null?null:pct(stockIndex,stock3),totalLoans:state.bank.totalLoans,totalLoans3Ago:loans3,loanGrowth3Pct:loans3===null?null:pct(state.bank.totalLoans,loans3),liquidAssets:state.bank.liquidAssets,shortTermLiabilities:state.bank.shortTermLiabilities,liquidityPct:div(100*state.bank.liquidAssets,state.bank.shortTermLiabilities),nonperformingLoans:state.bank.nonperformingLoans,nplPct:div(100*state.bank.nonperformingLoans,state.bank.totalLoans),fedRatePct:state.fedRatePercent,rateCooldownRounds:cooldown,monetaryProgram:program,monetaryProgramRoundsLeft:program?state.monetaryProgram.startRound+2-round:0,dataWarnings:[]};
-}
-const cmp=(label,value,op,limit)=>`${label} ${value===null?'—':round2(value).toFixed(2)+'%'} ${op} ${limit}%（${value===null?'資料不足':op==='≥'?value>=limit?'是':'否':op==='≤'?value<=limit?'是':'否':value<limit?'是':'否'}）`;
-export function evaluateFed(snapshot,state){
-  const tests={
-    F01:{ok:snapshot.inflationPct>=8,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',8)]},
-    F02:{ok:snapshot.inflationPct>=4&&snapshot.previousInflationPct>=4,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',4),cmp('π(t−1)',snapshot.previousInflationPct,'≥',4)]},
-    F03:{ok:snapshot.inflationPct>=6&&snapshot.growthPct<=-5,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',6),cmp('g(t)',snapshot.growthPct,'≤',-5)]},
-    F04:{ok:snapshot.growthPct<=-10&&snapshot.previousGrowthPct<=-10,comparisons:[cmp('g(t)',snapshot.growthPct,'≤',-10),cmp('g(t−1)',snapshot.previousGrowthPct,'≤',-10)]},
-    F05:{ok:snapshot.unemploymentPct>=10&&snapshot.previousUnemploymentPct>=10,comparisons:[cmp('u(t)',snapshot.unemploymentPct,'≥',10),cmp('u(t−1)',snapshot.previousUnemploymentPct,'≥',10)]},
-    F06:{ok:snapshot.inflationPct<=-2&&snapshot.previousInflationPct<=-2,comparisons:[cmp('π(t)',snapshot.inflationPct,'≤',-2),cmp('π(t−1)',snapshot.previousInflationPct,'≤',-2)]},
-    F07:{ok:snapshot.stockReturn1Pct<=-25,comparisons:[cmp('股市單季',snapshot.stockReturn1Pct,'≤',-25),cmp('g(t)',snapshot.growthPct,'<',0)]},
-    F08:{ok:snapshot.liquidityPct<10,comparisons:[cmp('流動性',snapshot.liquidityPct,'<',10)]},
-    F09:{ok:snapshot.nplPct>=8,comparisons:[cmp('壞帳率',snapshot.nplPct,'≥',8)]},
-    F10:{ok:snapshot.stockReturn3Pct>=30&&snapshot.loanGrowth3Pct>=20,comparisons:[cmp('股市三季',snapshot.stockReturn3Pct,'≥',30),cmp('放款三季',snapshot.loanGrowth3Pct,'≥',20)]}
-  };
-  const evaluations=FED_RULES.map(rule=>({ruleId:rule.id,name:rule.name,requiredMetricIds:rule.fields,comparisons:tests[rule.id].comparisons,status:rule.fields.some(k=>snapshot[k]===null||snapshot[k]===undefined)?'insufficient_data':tests[rule.id].ok?'matched':'not_matched',reason:'',proposedAction:null,nextEffectiveRound:null}));
-  const selectedId=FED_PRIORITY.find(id=>evaluations.find(x=>x.ruleId===id).status==='matched')||null;
-  for(const ev of evaluations){
-    if(ev.status==='matched'&&ev.ruleId!==selectedId){ev.status='suppressed_by_priority';ev.reason=`優先序低於 ${selectedId}`}
+function tileEffect(state,player,{leverage=false,noReward=false,forcedRed=false}={}){
+  const board=boardOf(state);
+  const tile=board[player.position];
+  const effects=[];
+  const push=(icon,text,tone='neutral')=>effects.push({icon,text,tone});
+  // 派對擴充：電商「購物節狂歡」的無敵狀態可讓本回合所有踩格效果失效。
+  if(player.ext?.immune){
+    push('✨','無敵狀態：本回合所有踩格效果無效化','good');
+    return effects;
   }
-  const chosen=evaluations.find(x=>x.ruleId===selectedId);
-  if(chosen){
-    let action='維持利率與金融措施',kind='none',delta=0;
-    switch(selectedId){
-      case 'F01':kind='rate';delta=.75;action='升息 0.75 個百分點';break;
-      case 'F02':kind='rate';delta=.25;action='升息 0.25 個百分點';break;
-      case 'F03':action='維持利率，觀察金融風險';break;
-      case 'F04':kind='rate';delta=-.5;action='降息 0.50 個百分點';break;
-      case 'F05':kind='rate';delta=-.25;action='降息 0.25 個百分點';break;
-      case 'F06':kind=snapshot.fedRatePct===0?'program':'rate';delta=-.5;action=kind==='program'?'啟動 QE 2 回合':'降息 0.50 個百分點';break;
-      case 'F07':kind=snapshot.growthPct<0?'program':'none';action=kind==='program'?'啟動 QE 2 回合':'市場觀察公告：景氣尚未衰退';break;
-      case 'F08':kind='rescue';action='緊急流動性融資補足至 15%';break;
-      case 'F09':kind='restriction';action='停止高風險新增放款 2 回合';break;
-      case 'F10':kind=snapshot.fedRatePct<6?'rate':'program';delta=.25;action=kind==='rate'?'升息 0.25 個百分點':'啟動 QT 2 回合';break;
+  let type=forcedRed?'red':tile.type;
+  if(forcedRed&&tile.type!=='red')push('🔌','限電危機生效，本次落地強制視為蕭條格','bad');
+  if(!['start','blue','red','yellow','green'].includes(type)){
+    if(engineHooks.resolveTile)engineHooks.resolveTile(state,player,{leverage,noReward,forcedRed},effects);
+    return effects;
+  }
+  const mult=leverage?2:1;
+  if(type==='blue'){
+    const base=tile.value||300,amount=base*mult;
+    if(noReward){
+      push('🚫','銀根緊縮：發財格獎勵被沒收','bad');
+    }else{
+      const anniversary=state.effects.anniversary;
+      if(anniversary&&anniversary.round===state.round&&anniversary.ownerId!==player.id){
+        const owner=state.players.find(p=>p.id===anniversary.ownerId);
+        if(owner){
+          addCash(state,owner,amount);
+          push('🎊',`${owner.name} 的瘋狂週年慶截走 ${amount} 總資產`,'good');
+        }
+      }else{
+        addCash(state,player,amount);
+        push('💰',`發財格：獲得 ${amount} 總資產`,'good');
+      }
     }
-    if(kind==='rate'&&snapshot.rateCooldownRounds>0){chosen.status='rate_cooldown';chosen.reason=`利率冷卻尚餘 ${snapshot.rateCooldownRounds} 回合`;action='冷卻中，維持利率';kind='none'}
-    else {chosen.status='selected';chosen.reason='依優先序採用'}
-    chosen.proposedAction=action;chosen.nextEffectiveRound=snapshot.round+1;
-    return {evaluations,decision:{round:snapshot.round,ruleId:selectedId,action,kind,delta,nextEffectiveRound:snapshot.round+1}};
+  }else if(type==='red'){
+    const tariff=state.effects.tariff;
+    const doubled=!leverage&&tariff&&tariff.rounds>0&&tariff.sourceId!==player.id;
+    const base=tile.type==='red'?(tile.value||150):150;
+    let amount=base*mult*(doubled?2:1);
+    if(engineHooks.tileDamageMultiplier)amount=Math.round(amount*engineHooks.tileDamageMultiplier(state,player,'red',amount));
+    if(engineHooks.tileDamageBlocked&&engineHooks.tileDamageBlocked(state,player,'red')){
+      push('✨','無敵／卍解狀態無效化本次扣款','good');
+    }else{
+      addCash(state,player,-amount);
+      push('📉',`蕭條格：扣除 ${amount} 營運費${doubled?'（關稅壁壘加倍）':leverage?'（槓桿加倍）':''}`,'bad');
+    }
+  }else if(type==='yellow'){
+    if(noReward){
+      push('🚫','銀根緊縮：技能能量被沒收','bad');
+    }else{
+      const amount=(tile.value||1)*mult;
+      player.energy=clamp(player.energy+amount,0,9);
+      push('⚡',`技能格：獲得 ${amount} 點技能能量`,'good');
+    }
+  }else if(type==='green'){
+    const event=eventById(pick(state,PARTY_EVENTS).id);
+    push(event.icon,`${event.name}：${event.text}`,'event');
+    if(engineHooks.tileEvent)engineHooks.tileEvent(state,player,event,effects);
+    if(event.kind==='allCash'){
+      for(const target of state.players)addCash(state,target,event.amount);
+    }else if(event.kind==='selfCash'){
+      addCash(state,player,event.amount);
+    }else if(event.kind==='selfEnergy'){
+      player.energy=clamp(player.energy+event.amount,0,9);
+    }else if(event.kind==='allEnergy'){
+      for(const target of state.players)target.energy=clamp(target.energy+event.amount,0,9);
+    }
+  }else if(type==='start'){
+    push('🚩','出發點：集齊四角記號並經過此處可領取 1,000 元補助金','neutral');
   }
-  return {evaluations,decision:{round:snapshot.round,ruleId:null,action:'維持利率與金融措施',kind:'none',delta:0,nextEffectiveRound:snapshot.round+1}};
+  return effects;
 }
 
-function applyDecision(state,decision){
-  if(!decision)return;
-  if(decision.kind==='rate')state.fedRatePercent=clamp(round2(state.fedRatePercent+decision.delta),0,10);
-  if(decision.kind==='program'){
-    const type=decision.action.includes('QE')?'QE':'QT';
-    state.monetaryProgram={type,startRound:state.round};
+// 供交換位置、矢量操作等「非目前回合玩家」立即結算所在格效果使用。
+// 只處理該格的停留效果，不另外發放通過起點獎金。
+export function resolveTileFor(state,player,opts={}){
+  const effects=[];
+  if(!state||!player)return effects;
+  if(state.ghostPosition===player.position){
+    if(engineHooks.ghostStrike)engineHooks.ghostStrike(state,player,effects);
+    else{
+      const amount=150;
+      addCash(state,player,-amount);
+      effects.push({icon:'👻',text:`撞上罷工幽靈，扣除 ${amount} 營運費`,tone:'bad'});
+    }
+    return effects;
   }
-  if(decision.kind==='rescue'){
-    const amount=Math.max(0,.15*state.bank.shortTermLiabilities-state.bank.liquidAssets);
-    state.bank.liquidAssets+=amount;state.bank.shortTermLiabilities+=amount;
-    if(amount)state.bank.rescues.push({amount,dueRound:state.round+3});
-  }
-  if(decision.kind==='restriction')state.bank.riskRestrictionUntil=state.round+1;
-  if(decision.kind!=='none')state.log.unshift(`第 ${state.round} 季生效｜聯準會 ${decision.action}。`);
+  for(const e of tileEffect(state,player,opts))effects.push(e);
+  return effects;
 }
-export function endTurn(state){
-  if(state.status!=='playing'||!['manage','strike'].includes(state.phase))throw Error('請先完成本回合。');
-  moveGhost(state);
-  if(state.turnIndex<state.players.length-1){state.turnIndex++;state.phase='roll';state.dice=null;state.reels=null;state.lastDraw=null;return null}
-  const result=settleSeason(state);return result;
+
+function landingForSwap(state,player,other){
+  return resolveTileFor(state,player,{leverage:player===other?false:player.leverage})
+    .map(e=>({...e,text:`${player.name}：${e.text}`}));
 }
-export function settleSeason(state){
+
+export function rollDie(state,forced,options={}){
   if(state.status!=='playing')throw Error('遊戲已結束。');
-  const round=state.round;
-  const financialResults=Object.fromEntries(ROLES.map(r=>[r.id,financials(state,r.id,round)]));
-  for(const r of ROLES)state.companies[r.id].cash=round2(state.companies[r.id].cash+financialResults[r.id].profit);
-  const snapshot=makeSnapshot(state,round);
-  state.economicHistory.push(snapshot);
-  const {evaluations,decision}=evaluateFed(snapshot,state);
-  state.evaluations.push({round,items:evaluations});state.decisions.push(decision);
-  state.log.unshift(`第 ${round} 季結算完成｜總營收 ${Math.round(snapshot.revenueTotal).toLocaleString()}、通膨 ${round2(snapshot.inflationPct)}%、聯準會：${decision.action}。`);
-  if(decision.kind==='rate')state.lastRateDecisionRound=round;
-  const bankrupt=state.players.filter(p=>state.companies[p.roleId].cash+financialResults[p.roleId].assetValue-state.companies[p.roleId].debt<=0);
-  const achievers=state.players.filter(p=>state.companies[p.roleId].cash+financialResults[p.roleId].assetValue-state.companies[p.roleId].debt>=state.targetWealth);
-  if(bankrupt.length||achievers.length||round>=state.maxRounds){
-    state.status=bankrupt.length?'bankruptcy':achievers.length?'goal':'round_limit';
-    state.winnerIds=(achievers.length?achievers:state.players.filter(p=>!bankrupt.includes(p)).sort((a,b)=>companyPosition(state,b.roleId).netWorth-companyPosition(state,a.roleId).netWorth).slice(0,1)).map(p=>p.id);
-    state.phase='finished';return {snapshot,decision,finished:true};
+  if(state.phase!=='roll')throw Error('現在無法擲骰。');
+  const player=currentPlayer(state);
+  // 魔女因子等擲骰前快照：每次擲骰都重新覆蓋，回溯點才會精準落在本次擲骰前。
+  if(engineHooks.beforeRoll)engineHooks.beforeRoll(state,player);
+  let value;
+  if(player.ext?.oneStepLock||player.forcedSteps==='one'){
+    value=1;
+  }else if(forced!==undefined&&forced!==null){
+    if(!Number.isInteger(forced)||forced<1||forced>6)throw Error('骰子只能是 1–6。');
+    value=forced;
+  }else if(player.forcedSteps==='low'){
+    value=1+Math.floor(nextRandom(state)*3);
+  }else if(player.forcedSteps==='high'){
+    value=4+Math.floor(nextRandom(state)*3);
+  }else{
+    value=1+Math.floor(nextRandom(state)*6);
+  }
+  let noReward=player.noReward;
+  if(player.bankLock){
+    value=1;
+    noReward=true;
+    player.bankLock=false;
+    log(state,`🔒 ${player.name} 受到緊縮銀根影響，本回合只能前進 1 格。`);
+  }
+  const board=boardOf(state);
+  const leverage=Boolean(player.leverage);
+  const from=player.position,fullPath=movementPath(from,value,board.length);
+  const adjusted=engineHooks.adjustMovePath?.(state,player,fullPath,{from,value});
+  const path=Array.isArray(adjusted)?adjusted:(adjusted?.path||fullPath);
+  const moveMeta=adjusted?.meta||null;
+  player.position=path.at(-1)??from;
+  // 先把棋子移到終點；所有格子效果都延後到 resolveLanding()，
+  // 確保 UI 播完移動動畫、棋子真正停下後才結算與彈窗。
+  state.lastRoll={playerId:player.id,value,from,path,tileIndex:player.position,tileType:board[player.position]?.type,struck:false,passedStart:path.includes(0),effects:[],resolved:false,vector:moveMeta?.vector||null};
+  if(options.defer){
+    state.pendingLanding={playerId:player.id,from,value,path,leverage,noReward,forcedRed:Boolean(player.forcedRed)};
+    state.pendingDecision=null;
+    state.phase='moving';
+    return state.lastRoll;
+  }
+  resolveLanding(state);
+  return state.lastRoll;
+}
+
+// 棋子停止後才發動格子效果（發財／蕭條／技能／事件／幽靈／特殊格）。
+export function resolveLanding(state,options={}){
+  if(!state||state.status!=='playing')return state?.lastRoll||null;
+  const roll=state.lastRoll;
+  if(!roll||roll.resolved)return roll||null;
+  const player=state.players.find(p=>p.id===roll.playerId);
+  if(!player)return roll;
+  const pending=state.pendingLanding&&state.pendingLanding.playerId===player.id?state.pendingLanding:null;
+  const board=boardOf(state);
+  const leverage=pending?Boolean(pending.leverage):Boolean(player.leverage);
+  const noReward=pending?Boolean(pending.noReward):Boolean(player.noReward);
+  const forcedRed=pending?Boolean(pending.forcedRed):Boolean(player.forcedRed);
+  const effects=Array.isArray(roll.effects)?roll.effects:[];
+  roll.effects=effects;
+  applyCornerProgress(state,player,roll.path,{passedStart:roll.passedStart&&player.position!==0,effects});
+  // 新版規則：只有「踩在幽靈格」才觸發，路過不算。
+  const struck=player.position===state.ghostPosition;
+  roll.struck=struck;
+  roll.tileIndex=player.position;
+  roll.tileType=board[player.position]?.type;
+  if(struck){
+    if(engineHooks.ghostStrike)engineHooks.ghostStrike(state,player,effects);
+    else{
+      const penalty=150*(leverage?2:1);
+      addCash(state,player,-penalty);
+      effects.push({icon:'👻',text:`踩中罷工幽靈，扣除 ${penalty} 營運費`,tone:'bad'});
+    }
+    log(state,`${player.name} 擲出 ${roll.value}，在第 ${player.position} 格踩中罷工幽靈。`);
+  }else{
+    for(const e of tileEffect(state,player,{leverage,noReward,forcedRed}))effects.push(e);
+    log(state,`${player.name} 擲出 ${roll.value}，停在「${board[player.position].label}」格${effects.length?`：${effects.map(e=>e.text.replace(/。$/,'')).join('；')}`:''}。`);
+  }
+  player.forcedSteps=null;
+  if(player.ext)player.ext.oneStepLock=false;
+  player.leverage=false;
+  player.forcedRed=false;
+  player.noReward=false;
+  roll.resolved=true;
+  state.pendingLanding=null;
+  if(engineHooks.afterRoll)engineHooks.afterRoll(state,player,roll,options);
+  if(state.status==='playing'&&state.phase==='roll'){
+    if(!struck){
+      const decision={playerId:player.id,kind:'landing',options:DECISION_OPTIONS.map(x=>({...x,available:x.id!=='invest'||player.cash>=300}))};
+      state.pendingDecision=engineHooks.prepareDecision?engineHooks.prepareDecision(state,decision,player)||decision:decision;
+      state.phase='decision';
+    }else{
+      state.phase='resolve';
+    }
+  }else if(state.status==='playing'&&state.phase==='moving'){
+    state.phase=struck?'resolve':'resolve';
+  }
+  return roll;
+}
+
+export function chooseDecision(state,optionId){
+  if(state.status!=='playing'||state.phase!=='decision'||!state.pendingDecision)throw Error('目前沒有待決定事項。');
+  const p=state.players.find(x=>x.id===state.pendingDecision.playerId);
+  const option=(state.pendingDecision.options||[]).find(x=>x.id===optionId)||DECISION_OPTIONS.find(x=>x.id===optionId);
+  if(!option||!p)throw Error('決策選項無效。');
+  if(option.available===false)throw Error('這個選項目前不可用。');
+  const cash=Number(option.cash)||0,energy=Number(option.energy)||0,shields=Number(option.shields)||0;
+  if(cash<0&&p.cash< -cash&&!option.allowDebt)throw Error(`總資產不足 ${Math.abs(cash)}，無法執行這個選項。`);
+  if(cash)addCash(state,p,cash);
+  // 允許負債的決策可能直接觸發破產／終局，不能再把已結束的階段覆寫回 resolve。
+  if(state.status!=='playing'||p.ext?.eliminated){state.pendingDecision=null;return option;}
+  if(energy)p.energy=clamp(p.energy+energy,0,9);
+  if(shields)p.shields+=shields;
+  if(option.certificate&&engineHooks.grantCertificate)engineHooks.grantCertificate(state,p,option.certificate);
+  log(state,`${option.icon||'🤔'} ${p.name} 做出決策「${option.label||option.name||optionId}」${cash?`：${cash>0?'獲得':'支付'} ${Math.abs(cash)} 總資產`:''}${energy?`、${energy>0?'獲得':'失去'} ${Math.abs(energy)} 能量`:''}。`);
+  state.pendingDecision=null;
+  state.phase='resolve';
+  return option;
+}
+
+export function useItem(state,itemId,targetId){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase!=='roll')throw Error('道具只能在擲骰前使用。');
+  const p=currentPlayer(state),index=p.items.indexOf(itemId);
+  if(engineHooks.canUse&&!engineHooks.canUse(state,p,'item',itemId))throw Error(engineHooks.blockedReason?.(state,p,'item',itemId)||'目前無法使用道具。');
+  if(index===-1)throw Error('你沒有這個道具。');
+  const item=itemById(itemId),target=state.players.find(x=>x.id===targetId);
+  if(!item)throw Error('道具不存在。');
+  const opponents=state.players.filter(x=>x.id!==p.id);
+  if(itemId==='swap'){
+    if(!target||target.id===p.id)throw Error('請選擇一位對手交換位置。');
+    const from=p.position,to=target.position;
+    p.position=to;target.position=from;
+    applyCornerProgress(state,p,[to]);
+    applyCornerProgress(state,target,[from]);
+    log(state,`🔄 ${p.name} 與 ${target.name} 交換位置。`);
+    const effects=[...landingForSwap(state,p,target),...landingForSwap(state,target,p)];
+    p.items.splice(index,1);
+    state.lastRoll={playerId:p.id,value:0,from,path:[to],tileIndex:to,tileType:boardOf(state)[to].type,struck:false,effects,swap:{targetId:target.id,from,to}};
+    if(state.phase==='roll')state.phase='roll';
+    return {item,effects};
+  }
+  if(itemId==='shield'){
+    p.shields+=1;
+    log(state,`🛡️ ${p.name} 使用買保險，獲得 1 層護盾（共 ${p.shields} 層）。`);
+  }else if(itemId==='dice123'){
+    p.forcedSteps='low';
+    log(state,`🎲 ${p.name} 使用 123 骰子，本回合點數必定為 1–3。`);
+  }else if(itemId==='dice456'){
+    p.forcedSteps='high';
+    log(state,`🎲 ${p.name} 使用 456 骰子，本回合點數必定為 4–6。`);
+  }else if(itemId==='leverage'){
+    p.leverage=true;
+    log(state,`📈 ${p.name} 使用開槓桿，本回合踩格效果 ×2。`);
+  }
+  p.items.splice(index,1);
+  return {item,effects:[]};
+}
+
+function skillBlocked(state,p){
+  const lock=state.effects.lockdown;
+  return lock&&lock.round===state.round&&roleById(p.roleId)?.sector===lock.sector;
+}
+
+export function useSkill(state,targetId,sector){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase!=='roll')throw Error('企業技能只能在擲骰前使用。');
+  const p=currentPlayer(state),target=state.players.find(x=>x.id===targetId);
+  if(engineHooks.canUse&&!engineHooks.canUse(state,p,'skill'))throw Error(engineHooks.blockedReason?.(state,p,'skill')||'目前無法使用技能。');
+  if(skillBlocked(state,p))throw Error('限電危機生效中，本回合無法使用技能。');
+  if(p.energy<1)throw Error('技能能量不足，請先踩技能格或使用道具補充。');
+  const role=roleById(p.roleId);
+  if(!role)throw Error('企業角色無效。');
+  const others=state.players.filter(x=>x.id!==p.id);
+  const needTarget=role.skill.target==='opponent';
+  if(needTarget&&(!target||target.id===p.id))throw Error('請選擇一位對手作為技能目標。');
+  if(role.skill.target==='sector'&&!SECTORS.includes(sector))throw Error('請選擇一個產業。');
+  const result=[];
+  switch(p.roleId){
+    case 'investment':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const amount=Math.min(500,Math.max(0,Math.floor(target.cash*.25)));
+      if(!amount)throw Error('目標總資產不足，無法做空。');
+      addCash(state,target,-amount);addCash(state,p,amount);
+      result.push(`從 ${target.name} 竊取 ${amount} 總資產`);
+      break;
+    }
+    case 'bank':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.bankLock=true;target.noReward=true;
+      result.push(`${target.name} 下回合只能前進 1 格且沒有踩格獎勵`);
+      break;
+    }
+    case 'electronics':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.skipTurns=(target.skipTurns||0)+1;
+      addCash(state,target,-200);addCash(state,p,200);
+      result.push(`${target.name} 下回合暫停行動，並轉移 200 總資產`);
+      break;
+    }
+    case 'auto':{
+      state.effects.tariff={rounds:2,sourceId:p.id};
+      result.push('未來 2 回合其他玩家踩紅格扣款翻倍');
+      break;
+    }
+    case 'retail':{
+      state.effects.anniversary={round:state.round,ownerId:p.id};
+      result.push('本回合其他玩家的藍格總資產全部歸你');
+      break;
+    }
+    case 'agriculture':{
+      let collected=0;
+      for(const other of others){
+        if(consumeShield(state,other,role.skill.name))continue;
+        addCash(state,other,-150);
+        collected+=150;
+      }
+      const half=Math.floor(collected/2);
+      addCash(state,p,half);
+      result.push(`所有對手損失 150，你收到 ${half} 總資產`);
+      break;
+    }
+    case 'energy':{
+      state.effects.lockdown={round:state.round,sector};
+      let count=0;
+      for(const other of state.players){
+        if(roleById(other.roleId)?.sector===sector){other.forcedRed=true;count++}
+      }
+      result.push(`${sector} 共 ${count} 位玩家本回合禁用技能，下次踩格強制紅格`);
+      break;
+    }
+    case 'logistics':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const offset=1+Math.floor(nextRandom(state)*3);
+      const from=target.position;
+      state.ghostTrail=[from,...Array.from({length:offset},(_,i)=>(from+i+1)%BOARD.length)];
+      state.ghostPosition=(from+offset)%BOARD.length;
+      result.push(`罷工幽靈被移到 ${target.name} 前方 ${offset} 格`);
+      break;
+    }
+    case 'property':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.rentTo=p.id;target.rentTurns=(target.rentTurns||0)+2;
+      result.push(`${target.name} 接下來 2 個回合每回合付你 100 租金`);
+      break;
+    }
+    case 'technology':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const canSteal=target.cash>0;
+      if(target.energy>0&&(!canSteal||nextRandom(state)<.5)){
+        target.energy--;
+        result.push(`刪除 ${target.name} 1 點技能能量`);
+      }else if(canSteal){
+        const amount=Math.min(300,Math.max(0,target.cash));
+        addCash(state,target,-amount);addCash(state,p,amount);
+        result.push(`偷取 ${target.name} ${amount} 總資產`);
+      }else{
+        target.energy=Math.max(0,target.energy-1);
+        result.push(`刪除 ${target.name} 1 點技能能量`);
+      }
+      break;
+    }
+    default:throw Error('此企業沒有可用技能。');
+  }
+  p.energy-=1;
+  log(state,`${role.skill.icon} ${p.name} 發動「${role.skill.name}」：${result.join('；')}。`);
+  return {skill:role.skill,result};
+}
+
+export function buyStar(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法購買星星。');
+  const p=currentPlayer(state);
+  if(p.stars>=STAR_GOAL)throw Error('已經達成勝利星數。');
+  if(p.cash<STAR_COST)throw Error(`購買併購星需要 ${STAR_COST} 總資產。`);
+  addCash(state,p,-STAR_COST);
+  p.stars+=1;
+  log(state,`⭐ ${p.name} 以 ${STAR_COST} 總資產買下第 ${p.stars} 顆併購星。`);
+  checkStarWin(state);
+  return p.stars;
+}
+
+function acquisitionCost(state,acquirer,target){
+  if(acquirer.cash<0&&target.cash<0)return 0;
+  if(acquirer.cash<ACQUIRE_COST)throw Error(`發動併購需要 ${ACQUIRE_COST} 總資產，或雙方總資產皆為負值。`);
+  return target.cash<0?ACQUIRE_DISCOUNT_COST:ACQUIRE_COST;
+}
+
+export function acquireTarget(state,targetId){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法發動併購。');
+  const p=currentPlayer(state),target=state.players.find(x=>x.id===targetId);
+  if(!target||target.id===p.id)throw Error('請選擇一位對手。');
+  if(target.parentId)throw Error('該玩家已是其他公司的子公司。');
+  if(state.players.some(x=>x.parentId===p.id))throw Error('你已有一家子公司，無法再併購。');
+  if(target.stars>=STAR_GOAL)throw Error('已達勝利星數的玩家無法被併購。');
+  const cost=acquisitionCost(state,p,target);
+  if(cost>0&&p.cash<cost)throw Error(`併購需要 ${cost} 總資產。`);
+  addCash(state,p,-cost);
+  if(cost)addCash(state,target,Math.floor(cost*.25));
+  target.parentId=p.id;
+  log(state,`🤝 ${p.name} 以 ${cost} 總資產併購 ${target.name}，${target.name} 成為子公司（每回合上繳 40% 收益）。`);
+  return {cost,target};
+}
+
+export function rebel(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法發動獨立反撲。');
+  const p=currentPlayer(state);
+  if(!p.parentId)throw Error('你不是任何公司的子公司。');
+  if(p.cash<REBEL_COST)throw Error(`獨立反撲需要 ${REBEL_COST} 總資產。`);
+  const parent=state.players.find(x=>x.id===p.parentId);
+  addCash(state,p,-REBEL_COST);
+  p.parentId=null;
+  log(state,`🕊️ ${p.name} 支付 ${REBEL_COST} 總資產，成功脫離 ${parent?.name||'母公司'} 獨立。`);
+  return true;
+}
+
+export function endTurn(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase==='decision'||state.phase==='roll')throw Error('請先完成擲骰與決策。');
+  if(!['resolve','skipped'].includes(state.phase))throw Error('現在無法結束回合。');
+  const p=currentPlayer(state);
+  if(engineHooks.beforeEndTurn)engineHooks.beforeEndTurn(state,p);
+  const gain=Math.max(0,state.turnGains[p.id]||0);
+  if(p.parentId&&gain>0){
+    const parent=state.players.find(x=>x.id===p.parentId);
+    if(parent){
+      const transfer=Math.round(gain*.4);
+      addCash(state,p,-transfer);addCash(state,parent,transfer);
+      log(state,`🏢 ${p.name} 上繳 40% 收益 ${transfer} 總資產給母公司 ${parent.name}。`);
+    }
+  }
+  moveGhost(state);
+  if(state.turnIndex>=state.players.length-1){
+    const result=settleRound(state);
+    return result;
+  }
+  state.turnIndex++;
+  state.dice=null;
+  startTurn(state);
+  return null;
+}
+
+export function settleRound(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  const finishedRound=state.round;
+  if(state.effects.tariff){
+    state.effects.tariff.rounds-=1;
+    if(state.effects.tariff.rounds<=0){
+      log(state,`🧱 ${state.players.find(p=>p.id===state.effects.tariff.sourceId)?.name||''} 的關稅壁壘結束。`);
+      delete state.effects.tariff;
+    }
+  }
+  delete state.effects.anniversary;
+  delete state.effects.lockdown;
+  state.ghostTrail=[];
+  if(engineHooks.afterRound)engineHooks.afterRound(state,finishedRound,{final:state.round>=state.maxRounds});
+  if(state.status!=='playing')return {round:finishedRound,finished:true,reason:state.resultReason||'ext',winners:state.players.filter(p=>state.winnerIds.includes(p.id)).map(p=>p.name)};
+  if(state.round>=state.maxRounds){
+    const ranked=[...state.players].sort((a,b)=>b.stars-a.stars||b.cash-a.cash);
+    const top=ranked[0];
+    const winners=ranked.filter(p=>p.stars===top.stars&&p.cash===top.cash);
+    const override=engineHooks.beforeFinal?.(state,winners,ranked);
+    if(override&&override.continue){
+      state.round++;
+      state.turnIndex=0;
+      log(state,`⚡ 驟死賽開始｜第 ${state.round} 季，憤怒幽靈全面出動。`);
+      startTurn(state);
+      return {round:finishedRound,finished:false,suddenDeath:true};
+    }
+    finish(state,'rounds',winners);
+    return {round:finishedRound,finished:true,reason:'rounds',winners:winners.map(p=>p.name)};
   }
   state.round++;
-  state.struckPlayerIds=[];
-  state.activeEvents=state.activeEvents.filter(a=>eventRemaining(a,state.round)>0);
-  state.monetaryProgram=state.monetaryProgram&&state.round<state.monetaryProgram.startRound+2?state.monetaryProgram:null;
-  for(const rescue of [...state.bank.rescues])if(rescue.dueRound<=state.round&&state.bank.liquidAssets>=rescue.amount){state.bank.liquidAssets-=rescue.amount;state.bank.shortTermLiabilities-=rescue.amount;state.bank.rescues.splice(state.bank.rescues.indexOf(rescue),1);state.log.unshift(`第 ${state.round} 季｜銀行償還緊急融資 ${rescue.amount}。`)}
-  applyDecision(state,decision);
-  state.turnIndex=0;state.phase='roll';state.dice=null;state.reels=null;state.lastDraw=null;
-  return {snapshot,decision,finished:false};
+  state.turnIndex=0;
+  log(state,`第 ${state.round} 季開始｜市場重新洗牌，罷工幽靈繼續遊蕩。`);
+  startTurn(state);
+  return {round:finishedRound,finished:false};
 }
-export function getEconomicSnapshot(state,round){return state.economicHistory.find(x=>x.round===round)||null}
-export function getEconomicHistory(state,from=1,to=state.round){return state.economicHistory.filter(x=>x.round>=from&&x.round<=to)}
-export function getFedRuleEvaluations(state,round){return state.evaluations.find(x=>x.round===round)?.items||null}
-export function getFedDecision(state,round){return state.decisions.find(x=>x.round===round)||null}
+
+export function statusChips(state,player){
+  const chips=[];
+  if(player.shields>0)chips.push({icon:'🛡️',label:`護盾 ×${player.shields}`,tone:'shield'});
+  if(player.leverage)chips.push({icon:'📈',label:'槓桿 ×2',tone:'leverage'});
+  if(player.forcedSteps==='low')chips.push({icon:'🎲',label:'123 骰',tone:'dice'});
+  if(player.forcedSteps==='high')chips.push({icon:'🎲',label:'456 骰',tone:'dice'});
+  if(player.bankLock)chips.push({icon:'🔒',label:'銀根緊縮',tone:'bad'});
+  if(player.skipTurns>0)chips.push({icon:'⏸️',label:'下回合暫停',tone:'bad'});
+  if(player.forcedRed)chips.push({icon:'📉',label:'下次強制紅格',tone:'bad'});
+  if(player.rentTo&&player.rentTurns>0)chips.push({icon:'🏗️',label:`租金 ×${player.rentTurns}`,tone:'bad'});
+  if(player.parentId)chips.push({icon:'🏢',label:`子公司 · ${state.players.find(p=>p.id===player.parentId)?.name||'母公司'}`,tone:'subsidiary'});
+  if(player.stars>=STAR_GOAL)chips.push({icon:'⭐',label:'已達勝星',tone:'star'});
+  const lock=state.effects.lockdown;
+  if(lock&&lock.round===state.round&&roleById(player.roleId)?.sector===lock.sector)chips.push({icon:'🔌',label:'限電禁技',tone:'bad'});
+  if(engineHooks.extraStatusChips)chips.push(...(engineHooks.extraStatusChips(state,player)||[]));
+  return chips;
+}
+
+export function canAcquire(state,player,target){
+  if(!player||!target||player.id===target.id)return false;
+  if(target.parentId||state.players.some(x=>x.parentId===player.id))return false;
+  if(target.stars>=STAR_GOAL)return false;
+  if(player.cash<0&&target.cash<0)return true;
+  return player.cash>=ACQUIRE_COST;
+}
+
+export function canRebel(player){return Boolean(player&&player.parentId&&player.cash>=REBEL_COST)}
+
 export function exportGame(state){return JSON.stringify(state,null,2)}
-export function importGame(json){const s=JSON.parse(json);if(s.version!==1||!Array.isArray(s.players)||!Array.isArray(s.economicHistory)||!s.companies||!s.bank||!Array.isArray(s.activeEvents))throw Error('存檔格式不正確。');ensureGhostState(s);return s}
+
+function migrateLegacy(s){
+  const players=s.players.map((p,i)=>({
+    id:p.id||`player-${i+1}`,name:p.name,roleId:p.roleId,position:Number.isInteger(p.position)?p.position:0,color:Number.isInteger(p.color)?p.color:i,
+    cash:Number.isFinite(s.companies?.[p.roleId]?.cash)?s.companies[p.roleId].cash:START_CASH,stars:0,energy:1,items:[],shields:0,skipTurns:0,rentTo:null,rentTurns:0,parentId:null,leverage:false,bankLock:false,noReward:false,forcedRed:false,forcedSteps:null
+  }));
+  const legacyFinished=s.status&&s.status!=='playing';
+  const state={version:2,mode:'party',round:legacyFinished?s.maxRounds||1:s.round||1,maxRounds:s.maxRounds||10,starGoal:STAR_GOAL,turnIndex:legacyFinished?0:clamp(Number(s.turnIndex)||0,0,players.length-1),phase:legacyFinished?'finished':'roll',rng:Number.isInteger(s.rng)&&s.rng!==0?s.rng:(Number(s.seed)|0)||1,seed:Number(s.seed)||Date.now(),players,ghostRng:s.ghostRng||ghostSeed(s.seed||Date.now()),ghostPosition:s.ghostPosition,ghostTrail:[],effects:{},turnGains:{},lastRoll:null,pendingDecision:null,log:Array.isArray(s.log)?s.log.slice(0,160):[],status:legacyFinished?'finished':'playing',resultReason:legacyFinished?'legacy':null,winnerIds:legacyFinished&&Array.isArray(s.winnerIds)?s.winnerIds:[],sync:s.sync||null};
+  ensurePartyState(state);
+  state.log.unshift('📥 已將第 1 版財務存檔轉換為派對棋盤，總資產與企業角色完整保留。');
+  return state;
+}
+
+export function importGame(json){
+  const s=typeof json==='string'?JSON.parse(json):json;
+  if(!s||typeof s!=='object')throw Error('存檔格式不正確。');
+  if(s.version!==1&&s.version!==2)throw Error('存檔版本不支援。');
+  if(s.version===1)return migrateLegacy(s);
+  if(!Array.isArray(s.players)||s.players.length<2||s.players.length>8)throw Error('存檔玩家數量必須為 2 至 8 人。');
+  const validRole=id=>engineHooks.roleExists?engineHooks.roleExists(id):Boolean(roleById(id));
+  for(const p of s.players)if(!p||!validRole(p.roleId)||!String(p.name||'').trim())throw Error('存檔中的玩家或企業資料不正確。');
+  if(!Array.isArray(s.log))s.log=[];
+  return ensurePartyState(s);
+}

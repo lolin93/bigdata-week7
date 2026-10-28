@@ -1,60 +1,58 @@
-export const METRICS = ['revenue','labor','material','energy','import_tax','export_cost','interest','fixed','tax','investment'];
-export const METRIC_LABELS = {revenue:'營業收入',labor:'人力成本',material:'原物料／商品',energy:'能源／運輸',import_tax:'進口關稅',export_cost:'出口貿易',interest:'利息收支',fixed:'固定營運',tax:'稅金',investment:'投資損益',asset_value:'投資資產價值'};
-export const ROLES = [
-  ['auto','汽車製造商','製造業',[1000,-200,-250,-100,0,-80,-20,-100,-50,0],150,'🚘'],
-  ['electronics','電子製造商','製造業',[1200,-250,-300,-100,-60,-70,-30,-120,-70,30],140,'💻'],
-  ['retail','百貨零售商','消費業',[900,-180,-400,-40,-60,0,-20,-120,-30,0],150,'🛍️'],
-  ['bank','銀行','金融業',[250,-140,0,-10,0,0,450,-100,-70,40],70,'🏦'],
-  ['investment','投資公司','金融業',[180,-100,0,-5,0,0,-30,-45,-60,500],30,'📈'],
-  ['energy','能源公司','能源與運輸',[1100,-130,-350,-120,-20,-40,-70,-140,-70,0],85,'⚡'],
-  ['logistics','物流運輸公司','能源與運輸',[850,-220,-30,-250,-10,-20,-30,-100,-25,0],110,'🚚'],
-  ['property','房地產公司','民生業',[800,-80,-60,-40,0,0,-150,-170,-50,80],55,'🏙️'],
-  ['agriculture','農業食品公司','民生業',[800,-180,-260,-120,-20,-20,-20,-90,-25,0],100,'🌾'],
-  ['technology','科技服務公司','科技業',[900,-350,0,-40,0,-10,-20,-120,-65,20],60,'🧪']
-].map(([id,name,sector,values,headcount,icon])=>({id,name,sector,base:Object.fromEntries(METRICS.map((m,i)=>[m,values[i]])),baseHeadcount:headcount,icon}));
+// 派對棋盤資料：企業技能、道具、格子與即時事件。
+export const SECTORS=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];
 
-const ALL='all';
-const fx=(metric,pct,target=ALL)=>({metric,pct,target});
-export const GLOBAL_EVENTS = [
-  {id:'E01',name:'海灣戰爭爆發',duration:5,decay:[1,.75,.5,.25,.125],effects:[fx('material',20),fx('energy',40),fx('export_cost',15),fx('revenue',25,'energy')]},
-  {id:'E02',name:'全球金融海嘯',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-25),fx('asset_value',-35),fx('interest',15,'interest_negative'),fx('interest',-10,'bank')]},
-  {id:'E03',name:'全球供應鏈中斷',duration:4,decay:[1,.7,.4,.1],effects:[fx('material',25),fx('energy',20),fx('revenue',-15,'electronics'),fx('revenue',-10,'agriculture')]},
-  {id:'E04',name:'全球貿易戰',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('import_tax',50),fx('export_cost',40),fx('material',15),fx('revenue',-10,'auto,electronics')]},
-  {id:'E05',name:'AI 技術革命',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',40,'technology'),fx('revenue',25,'electronics'),fx('labor',20,'technology'),fx('labor',-10,'except_technology')]},
-  {id:'E06',name:'全球能源危機',duration:4,decay:[1,.7,.4,.1],effects:[fx('energy',60),fx('material',10),fx('revenue',40,'energy'),fx('revenue',-10,'logistics')]},
-  {id:'E07',name:'全球疫情爆發',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-35,'retail'),fx('revenue',20,'logistics'),fx('revenue',25,'technology'),fx('labor',10),fx('energy',15)]},
-  {id:'E08',name:'政府擴大基礎建設',duration:5,decay:[1,.75,.5,.25,.125],effects:[fx('revenue',25,'property'),fx('revenue',15,'auto,electronics'),fx('material',20),fx('revenue',20,'logistics')]},
-  {id:'E09',name:'全球消費熱潮',duration:3,decay:[1,.5,.25],effects:[fx('revenue',35,'retail'),fx('revenue',25,'auto'),fx('revenue',20,'electronics'),fx('material',15),fx('revenue',15,'logistics')]},
-  {id:'E10',name:'全球經濟衰退',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-20),fx('material',-20),fx('energy',-15),fx('asset_value',-20)]}
+export const ROLES=[
+  {id:'auto',name:'汽車製造商',sector:'製造業',icon:'🚘',skill:{name:'關稅壁壘',icon:'🧱',desc:'接下來 2 回合，其他玩家踩紅格扣款翻倍。',target:'none'}},
+  {id:'electronics',name:'電子製造商',sector:'製造業',icon:'💻',skill:{name:'專利訴訟',icon:'⚖️',desc:'指定玩家下回合暫停行動，並轉移 200 總資產給你。',target:'opponent'}},
+  {id:'retail',name:'百貨零售商',sector:'消費業',icon:'🛍️',skill:{name:'瘋狂週年慶',icon:'🎊',desc:'本回合其他玩家踩藍格賺的總資產，全部存入你的帳戶。',target:'none'}},
+  {id:'bank',name:'銀行',sector:'金融業',icon:'🏦',skill:{name:'緊縮銀根',icon:'🔒',desc:'指定玩家下回合只能前進 1 格，且踩格拿不到獎勵。',target:'opponent'}},
+  {id:'investment',name:'投資公司',sector:'金融業',icon:'📈',skill:{name:'惡意做空',icon:'🔻',desc:'竊取指定玩家 25% 總資產（最多 500），壯大自己的總資產池。',target:'opponent'}},
+  {id:'energy',name:'能源公司',sector:'能源與運輸',icon:'⚡',skill:{name:'限電危機',icon:'🔌',desc:'指定一個產業：該產業玩家本回合禁用技能，且下次踩格強制視為紅格。',target:'sector'}},
+  {id:'logistics',name:'物流運輸公司',sector:'能源與運輸',icon:'🚚',skill:{name:'扣留貨物',icon:'📦',desc:'把罷工幽靈移到指定玩家前方 1–3 格，擋住他的去路。',target:'opponent'}},
+  {id:'property',name:'房地產公司',sector:'民生業',icon:'🏙️',skill:{name:'炒地皮',icon:'🏗️',desc:'指定玩家接下來 2 個回合，每回合付你 100 租金。',target:'opponent'}},
+  {id:'agriculture',name:'農業食品公司',sector:'民生業',icon:'🌾',skill:{name:'糧食霸權',icon:'🍚',desc:'所有對手損失 150 總資產，其中半數轉給你。',target:'none'}},
+  {id:'technology',name:'科技服務公司',sector:'科技業',icon:'🧪',skill:{name:'駭客攻擊',icon:'🕶️',desc:'隨機刪除指定玩家 1 點技能能量，或偷取 300 總資產。',target:'opponent'}}
 ];
-export const PERSONAL_EVENTS = [
-  {id:'P01',name:'關鍵客戶續約',duration:3,decay:[1,.65,.3],effects:[fx('revenue',25)]},
-  {id:'P02',name:'設備故障維修',duration:2,decay:[1,.5],effects:[fx('fixed',35),fx('energy',15)]},
-  {id:'P03',name:'管理效率提升',duration:3,decay:[1,.6,.3],effects:[fx('fixed',-25),fx('labor',-10)]},
-  {id:'P04',name:'稅務補繳',duration:2,decay:[1,.5],effects:[fx('tax',40)]},
-  {id:'P05',name:'市場行銷奏效',duration:3,decay:[1,.7,.4],effects:[fx('revenue',20),fx('fixed',10)]},
-  {id:'P06',name:'投資判斷失準',duration:3,decay:[1,.6,.2],effects:[fx('investment',-30),fx('asset_value',-15)]}
+
+export const ITEMS=[
+  {id:'shield',name:'買保險',icon:'🛡️',desc:'獲得 1 層護盾，維持到下次自己回合開始，可疊加並抵擋 1 次其他玩家的負面干擾。'},
+  {id:'dice123',name:'123 骰子',icon:'🎲',desc:'本回合擲骰必定落在 1、2 或 3，覆蓋先前的變骰效果。'},
+  {id:'dice456',name:'456 骰子',icon:'🎲',desc:'本回合擲骰必定落在 4、5 或 6，覆蓋先前的變骰效果。'},
+  {id:'swap',name:'移形換位',icon:'🔄',desc:'選擇一位對手互換位置，雙方立刻觸發落地格效果；擲骰前可重複使用。'},
+  {id:'leverage',name:'開槓桿',icon:'📈',desc:'本回合踩格效果 ×2，包含獲利、扣款、技能能量與幽靈格扣款。'}
 ];
-export const SECTOR_EVENTS = [
-  {id:'S01',name:'製造業接單潮',sector:'製造業',duration:3,decay:[1,.65,.3],effects:[fx('revenue',20),fx('material',10)]},
-  {id:'S02',name:'消費市場轉弱',sector:'消費業',duration:3,decay:[1,.6,.3],effects:[fx('revenue',-22)]},
-  {id:'S03',name:'金融信用擴張',sector:'金融業',duration:3,decay:[1,.65,.3],effects:[fx('interest',20),fx('asset_value',12)]},
-  {id:'S04',name:'運輸燃料補貼',sector:'能源與運輸',duration:3,decay:[1,.6,.3],effects:[fx('energy',-25)]},
-  {id:'S05',name:'民生供應吃緊',sector:'民生業',duration:3,decay:[1,.6,.3],effects:[fx('material',30),fx('revenue',10)]},
-  {id:'S06',name:'科技採購熱潮',sector:'科技業',duration:3,decay:[1,.65,.3],effects:[fx('revenue',30),fx('labor',15)]}
+
+const TILE_COLORS={start:'出發',blue:'發財',red:'蕭條',yellow:'技能',green:'事件'};
+const TILE_ICONS={start:'🚩',blue:'💰',red:'📉',yellow:'⚡',green:'❓'};
+const TILE_VALUES={blue:300,red:150,yellow:1,green:0,start:0};
+const TILE_ORDER=['start','blue','red','yellow','green','blue','blue','red','yellow','green','blue','red','yellow','green','blue','red','yellow','green','blue','blue','red','yellow','green','blue'];
+export const BOARD=TILE_ORDER.map((type,index)=>({
+  index,
+  type,
+  label:TILE_COLORS[type],
+  icon:TILE_ICONS[type],
+  value:TILE_VALUES[type],
+  stay:type==='start'?'在地圖四個角落取得紅、綠、藍、黃四種記號後，經過出發點可領取1000元補助金，領取後記號重置':type==='blue'?'發財格：獲得總資產':type==='red'?'蕭條格：扣除營運費':type==='yellow'?'技能格：補充技能能量':type==='green'?'事件格：抽一張即時事件':'出發格'
+}));
+
+export const PARTY_EVENTS=[
+  {id:'G01',name:'全體股東紅利',icon:'🎉',kind:'allCash',amount:400,text:'景氣大好，全體玩家各獲得 400 總資產。'},
+  {id:'G02',name:'市場恐慌拋售',icon:'🌪️',kind:'allCash',amount:-200,text:'市場信心崩跌，全體玩家各損失 200 總資產。'},
+  {id:'G03',name:'政府紓困案',icon:'🏛️',kind:'selfCash',amount:500,text:'政府點名補助，你獲得 500 總資產。'},
+  {id:'G04',name:'同業搶單',icon:'🥊',kind:'selfCash',amount:-250,text:'競爭對手截走訂單，你損失 250 總資產。'},
+  {id:'G05',name:'技術突破',icon:'💡',kind:'selfEnergy',amount:2,text:'研發團隊傳來好消息，你獲得 2 點技能能量。'},
+  {id:'G06',name:'幽靈騷動',icon:'👻',kind:'allEnergy',amount:-1,text:'罷工幽靈四處作亂，全體玩家失去 1 點技能能量。'}
 ];
-export const ALL_EVENTS=[...GLOBAL_EVENTS,...PERSONAL_EVENTS,...SECTOR_EVENTS];
-export const FED_RULES=[
-  {id:'F01',name:'惡性通膨',fields:['inflationPct'],formula:'π(t) ≥ 8%'},
-  {id:'F02',name:'持續性通膨',fields:['inflationPct','previousInflationPct'],formula:'π(t) ≥ 4% 且 π(t−1) ≥ 4%'},
-  {id:'F03',name:'停滯性通膨',fields:['inflationPct','growthPct'],formula:'π(t) ≥ 6% 且 g(t) ≤ −5%'},
-  {id:'F04',name:'經濟嚴重衰退',fields:['growthPct','previousGrowthPct'],formula:'g(t) ≤ −10% 且 g(t−1) ≤ −10%'},
-  {id:'F05',name:'失業率過高',fields:['unemploymentPct','previousUnemploymentPct'],formula:'u(t) ≥ 10% 且 u(t−1) ≥ 10%'},
-  {id:'F06',name:'通貨緊縮',fields:['inflationPct','previousInflationPct'],formula:'π(t) ≤ −2% 且 π(t−1) ≤ −2%'},
-  {id:'F07',name:'金融市場崩盤',fields:['stockReturn1Pct','growthPct'],formula:'股市單季 ≤ −25%；景氣 < 0% 才啟動 QE'},
-  {id:'F08',name:'銀行流動性危機',fields:['liquidityPct','liquidAssets','shortTermLiabilities'],formula:'流動性 < 10%'},
-  {id:'F09',name:'銀行系統性壞帳',fields:['nplPct','nonperformingLoans','totalLoans'],formula:'壞帳率 ≥ 8%'},
-  {id:'F10',name:'資產泡沫過熱',fields:['stockReturn3Pct','loanGrowth3Pct','fedRatePct'],formula:'股市三季 ≥ 30% 且放款三季 ≥ 20%'}
+
+export const DECISION_OPTIONS=[
+  {id:'invest',label:'A · 投資研發',icon:'🔬',desc:'支付 300 總資產，立刻獲得 2 點技能能量。',cash:-300,energy:2},
+  {id:'squeeze',label:'B · 壓榨勞工',icon:'🏭',desc:'立刻獲得 200 總資產，但失去 1 點技能能量。',cash:200,energy:-1}
 ];
-export const FED_PRIORITY=['F08','F09','F07','F03','F01','F06','F04','F02','F05','F10'];
-export const BOARD = Array.from({length:24},(_,i)=> i===0?{type:'start',label:'出發'}:{type:['global','personal','sector'][(i-1)%3],label:{global:'全球事件',personal:'個人事件',sector:'產業事件'}[['global','personal','sector'][(i-1)%3]]});
+
+export const ITEM_CHANCE=0.2;
+export const STAR_COST=1000;
+export const STAR_GOAL=3;
+export const ACQUIRE_COST=2000;
+export const ACQUIRE_DISCOUNT_COST=1000;
+export const REBEL_COST=1000;
+export const START_CASH=2000;

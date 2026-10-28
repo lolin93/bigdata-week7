@@ -1,427 +1,3306 @@
-// Generated from data.js, engine.js, sync.js, room.js and app.js. Run node build.mjs after source edits.
+// Generated from data.js, party_data.js, engine.js, party_engine.js, sync.js, net.js, audio_system.js, ui_party.js, app.js. Run node build.mjs (or build.ps1) after source edits.
 'use strict';
-const METRICS = ['revenue','labor','material','energy','import_tax','export_cost','interest','fixed','tax','investment'];
-const METRIC_LABELS = {revenue:'營業收入',labor:'人力成本',material:'原物料／商品',energy:'能源／運輸',import_tax:'進口關稅',export_cost:'出口貿易',interest:'利息收支',fixed:'固定營運',tax:'稅金',investment:'投資損益',asset_value:'投資資產價值'};
-const ROLES = [
-  ['auto','汽車製造商','製造業',[1000,-200,-250,-100,0,-80,-20,-100,-50,0],150,'🚘'],
-  ['electronics','電子製造商','製造業',[1200,-250,-300,-100,-60,-70,-30,-120,-70,30],140,'💻'],
-  ['retail','百貨零售商','消費業',[900,-180,-400,-40,-60,0,-20,-120,-30,0],150,'🛍️'],
-  ['bank','銀行','金融業',[250,-140,0,-10,0,0,450,-100,-70,40],70,'🏦'],
-  ['investment','投資公司','金融業',[180,-100,0,-5,0,0,-30,-45,-60,500],30,'📈'],
-  ['energy','能源公司','能源與運輸',[1100,-130,-350,-120,-20,-40,-70,-140,-70,0],85,'⚡'],
-  ['logistics','物流運輸公司','能源與運輸',[850,-220,-30,-250,-10,-20,-30,-100,-25,0],110,'🚚'],
-  ['property','房地產公司','民生業',[800,-80,-60,-40,0,0,-150,-170,-50,80],55,'🏙️'],
-  ['agriculture','農業食品公司','民生業',[800,-180,-260,-120,-20,-20,-20,-90,-25,0],100,'🌾'],
-  ['technology','科技服務公司','科技業',[900,-350,0,-40,0,-10,-20,-120,-65,20],60,'🧪']
-].map(([id,name,sector,values,headcount,icon])=>({id,name,sector,base:Object.fromEntries(METRICS.map((m,i)=>[m,values[i]])),baseHeadcount:headcount,icon}));
+// 派對棋盤資料：企業技能、道具、格子與即時事件。
+const SECTORS=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];
 
-const ALL='all';
-const fx=(metric,pct,target=ALL)=>({metric,pct,target});
-const GLOBAL_EVENTS = [
-  {id:'E01',name:'海灣戰爭爆發',duration:5,decay:[1,.75,.5,.25,.125],effects:[fx('material',20),fx('energy',40),fx('export_cost',15),fx('revenue',25,'energy')]},
-  {id:'E02',name:'全球金融海嘯',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-25),fx('asset_value',-35),fx('interest',15,'interest_negative'),fx('interest',-10,'bank')]},
-  {id:'E03',name:'全球供應鏈中斷',duration:4,decay:[1,.7,.4,.1],effects:[fx('material',25),fx('energy',20),fx('revenue',-15,'electronics'),fx('revenue',-10,'agriculture')]},
-  {id:'E04',name:'全球貿易戰',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('import_tax',50),fx('export_cost',40),fx('material',15),fx('revenue',-10,'auto,electronics')]},
-  {id:'E05',name:'AI 技術革命',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',40,'technology'),fx('revenue',25,'electronics'),fx('labor',20,'technology'),fx('labor',-10,'except_technology')]},
-  {id:'E06',name:'全球能源危機',duration:4,decay:[1,.7,.4,.1],effects:[fx('energy',60),fx('material',10),fx('revenue',40,'energy'),fx('revenue',-10,'logistics')]},
-  {id:'E07',name:'全球疫情爆發',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-35,'retail'),fx('revenue',20,'logistics'),fx('revenue',25,'technology'),fx('labor',10),fx('energy',15)]},
-  {id:'E08',name:'政府擴大基礎建設',duration:5,decay:[1,.75,.5,.25,.125],effects:[fx('revenue',25,'property'),fx('revenue',15,'auto,electronics'),fx('material',20),fx('revenue',20,'logistics')]},
-  {id:'E09',name:'全球消費熱潮',duration:3,decay:[1,.5,.25],effects:[fx('revenue',35,'retail'),fx('revenue',25,'auto'),fx('revenue',20,'electronics'),fx('material',15),fx('revenue',15,'logistics')]},
-  {id:'E10',name:'全球經濟衰退',duration:6,decay:[1,.8,.6,.4,.2,.1],effects:[fx('revenue',-20),fx('material',-20),fx('energy',-15),fx('asset_value',-20)]}
+const ROLES=[
+  {id:'auto',name:'汽車製造商',sector:'製造業',icon:'🚘',skill:{name:'關稅壁壘',icon:'🧱',desc:'接下來 2 回合，其他玩家踩紅格扣款翻倍。',target:'none'}},
+  {id:'electronics',name:'電子製造商',sector:'製造業',icon:'💻',skill:{name:'專利訴訟',icon:'⚖️',desc:'指定玩家下回合暫停行動，並轉移 200 總資產給你。',target:'opponent'}},
+  {id:'retail',name:'百貨零售商',sector:'消費業',icon:'🛍️',skill:{name:'瘋狂週年慶',icon:'🎊',desc:'本回合其他玩家踩藍格賺的總資產，全部存入你的帳戶。',target:'none'}},
+  {id:'bank',name:'銀行',sector:'金融業',icon:'🏦',skill:{name:'緊縮銀根',icon:'🔒',desc:'指定玩家下回合只能前進 1 格，且踩格拿不到獎勵。',target:'opponent'}},
+  {id:'investment',name:'投資公司',sector:'金融業',icon:'📈',skill:{name:'惡意做空',icon:'🔻',desc:'竊取指定玩家 25% 總資產（最多 500），壯大自己的總資產池。',target:'opponent'}},
+  {id:'energy',name:'能源公司',sector:'能源與運輸',icon:'⚡',skill:{name:'限電危機',icon:'🔌',desc:'指定一個產業：該產業玩家本回合禁用技能，且下次踩格強制視為紅格。',target:'sector'}},
+  {id:'logistics',name:'物流運輸公司',sector:'能源與運輸',icon:'🚚',skill:{name:'扣留貨物',icon:'📦',desc:'把罷工幽靈移到指定玩家前方 1–3 格，擋住他的去路。',target:'opponent'}},
+  {id:'property',name:'房地產公司',sector:'民生業',icon:'🏙️',skill:{name:'炒地皮',icon:'🏗️',desc:'指定玩家接下來 2 個回合，每回合付你 100 租金。',target:'opponent'}},
+  {id:'agriculture',name:'農業食品公司',sector:'民生業',icon:'🌾',skill:{name:'糧食霸權',icon:'🍚',desc:'所有對手損失 150 總資產，其中半數轉給你。',target:'none'}},
+  {id:'technology',name:'科技服務公司',sector:'科技業',icon:'🧪',skill:{name:'駭客攻擊',icon:'🕶️',desc:'隨機刪除指定玩家 1 點技能能量，或偷取 300 總資產。',target:'opponent'}}
 ];
-const PERSONAL_EVENTS = [
-  {id:'P01',name:'關鍵客戶續約',duration:3,decay:[1,.65,.3],effects:[fx('revenue',25)]},
-  {id:'P02',name:'設備故障維修',duration:2,decay:[1,.5],effects:[fx('fixed',35),fx('energy',15)]},
-  {id:'P03',name:'管理效率提升',duration:3,decay:[1,.6,.3],effects:[fx('fixed',-25),fx('labor',-10)]},
-  {id:'P04',name:'稅務補繳',duration:2,decay:[1,.5],effects:[fx('tax',40)]},
-  {id:'P05',name:'市場行銷奏效',duration:3,decay:[1,.7,.4],effects:[fx('revenue',20),fx('fixed',10)]},
-  {id:'P06',name:'投資判斷失準',duration:3,decay:[1,.6,.2],effects:[fx('investment',-30),fx('asset_value',-15)]}
+
+const ITEMS=[
+  {id:'shield',name:'買保險',icon:'🛡️',desc:'獲得 1 層護盾，維持到下次自己回合開始，可疊加並抵擋 1 次其他玩家的負面干擾。'},
+  {id:'dice123',name:'123 骰子',icon:'🎲',desc:'本回合擲骰必定落在 1、2 或 3，覆蓋先前的變骰效果。'},
+  {id:'dice456',name:'456 骰子',icon:'🎲',desc:'本回合擲骰必定落在 4、5 或 6，覆蓋先前的變骰效果。'},
+  {id:'swap',name:'移形換位',icon:'🔄',desc:'選擇一位對手互換位置，雙方立刻觸發落地格效果；擲骰前可重複使用。'},
+  {id:'leverage',name:'開槓桿',icon:'📈',desc:'本回合踩格效果 ×2，包含獲利、扣款、技能能量與幽靈格扣款。'}
 ];
-const SECTOR_EVENTS = [
-  {id:'S01',name:'製造業接單潮',sector:'製造業',duration:3,decay:[1,.65,.3],effects:[fx('revenue',20),fx('material',10)]},
-  {id:'S02',name:'消費市場轉弱',sector:'消費業',duration:3,decay:[1,.6,.3],effects:[fx('revenue',-22)]},
-  {id:'S03',name:'金融信用擴張',sector:'金融業',duration:3,decay:[1,.65,.3],effects:[fx('interest',20),fx('asset_value',12)]},
-  {id:'S04',name:'運輸燃料補貼',sector:'能源與運輸',duration:3,decay:[1,.6,.3],effects:[fx('energy',-25)]},
-  {id:'S05',name:'民生供應吃緊',sector:'民生業',duration:3,decay:[1,.6,.3],effects:[fx('material',30),fx('revenue',10)]},
-  {id:'S06',name:'科技採購熱潮',sector:'科技業',duration:3,decay:[1,.65,.3],effects:[fx('revenue',30),fx('labor',15)]}
+
+const TILE_COLORS={start:'出發',blue:'發財',red:'蕭條',yellow:'技能',green:'事件'};
+const TILE_ICONS={start:'🚩',blue:'💰',red:'📉',yellow:'⚡',green:'❓'};
+const TILE_VALUES={blue:300,red:150,yellow:1,green:0,start:0};
+const TILE_ORDER=['start','blue','red','yellow','green','blue','blue','red','yellow','green','blue','red','yellow','green','blue','red','yellow','green','blue','blue','red','yellow','green','blue'];
+const BOARD=TILE_ORDER.map((type,index)=>({
+  index,
+  type,
+  label:TILE_COLORS[type],
+  icon:TILE_ICONS[type],
+  value:TILE_VALUES[type],
+  stay:type==='start'?'在地圖四個角落取得紅、綠、藍、黃四種記號後，經過出發點可領取1000元補助金，領取後記號重置':type==='blue'?'發財格：獲得總資產':type==='red'?'蕭條格：扣除營運費':type==='yellow'?'技能格：補充技能能量':type==='green'?'事件格：抽一張即時事件':'出發格'
+}));
+
+const PARTY_EVENTS=[
+  {id:'G01',name:'全體股東紅利',icon:'🎉',kind:'allCash',amount:400,text:'景氣大好，全體玩家各獲得 400 總資產。'},
+  {id:'G02',name:'市場恐慌拋售',icon:'🌪️',kind:'allCash',amount:-200,text:'市場信心崩跌，全體玩家各損失 200 總資產。'},
+  {id:'G03',name:'政府紓困案',icon:'🏛️',kind:'selfCash',amount:500,text:'政府點名補助，你獲得 500 總資產。'},
+  {id:'G04',name:'同業搶單',icon:'🥊',kind:'selfCash',amount:-250,text:'競爭對手截走訂單，你損失 250 總資產。'},
+  {id:'G05',name:'技術突破',icon:'💡',kind:'selfEnergy',amount:2,text:'研發團隊傳來好消息，你獲得 2 點技能能量。'},
+  {id:'G06',name:'幽靈騷動',icon:'👻',kind:'allEnergy',amount:-1,text:'罷工幽靈四處作亂，全體玩家失去 1 點技能能量。'}
 ];
-const ALL_EVENTS=[...GLOBAL_EVENTS,...PERSONAL_EVENTS,...SECTOR_EVENTS];
-const FED_RULES=[
-  {id:'F01',name:'惡性通膨',fields:['inflationPct'],formula:'π(t) ≥ 8%'},
-  {id:'F02',name:'持續性通膨',fields:['inflationPct','previousInflationPct'],formula:'π(t) ≥ 4% 且 π(t−1) ≥ 4%'},
-  {id:'F03',name:'停滯性通膨',fields:['inflationPct','growthPct'],formula:'π(t) ≥ 6% 且 g(t) ≤ −5%'},
-  {id:'F04',name:'經濟嚴重衰退',fields:['growthPct','previousGrowthPct'],formula:'g(t) ≤ −10% 且 g(t−1) ≤ −10%'},
-  {id:'F05',name:'失業率過高',fields:['unemploymentPct','previousUnemploymentPct'],formula:'u(t) ≥ 10% 且 u(t−1) ≥ 10%'},
-  {id:'F06',name:'通貨緊縮',fields:['inflationPct','previousInflationPct'],formula:'π(t) ≤ −2% 且 π(t−1) ≤ −2%'},
-  {id:'F07',name:'金融市場崩盤',fields:['stockReturn1Pct','growthPct'],formula:'股市單季 ≤ −25%；景氣 < 0% 才啟動 QE'},
-  {id:'F08',name:'銀行流動性危機',fields:['liquidityPct','liquidAssets','shortTermLiabilities'],formula:'流動性 < 10%'},
-  {id:'F09',name:'銀行系統性壞帳',fields:['nplPct','nonperformingLoans','totalLoans'],formula:'壞帳率 ≥ 8%'},
-  {id:'F10',name:'資產泡沫過熱',fields:['stockReturn3Pct','loanGrowth3Pct','fedRatePct'],formula:'股市三季 ≥ 30% 且放款三季 ≥ 20%'}
+
+const DECISION_OPTIONS=[
+  {id:'invest',label:'A · 投資研發',icon:'🔬',desc:'支付 300 總資產，立刻獲得 2 點技能能量。',cash:-300,energy:2},
+  {id:'squeeze',label:'B · 壓榨勞工',icon:'🏭',desc:'立刻獲得 200 總資產，但失去 1 點技能能量。',cash:200,energy:-1}
 ];
-const FED_PRIORITY=['F08','F09','F07','F03','F01','F06','F04','F02','F05','F10'];
-const BOARD = Array.from({length:24},(_,i)=> i===0?{type:'start',label:'出發'}:{type:['global','personal','sector'][(i-1)%3],label:{global:'全球事件',personal:'個人事件',sector:'產業事件'}[['global','personal','sector'][(i-1)%3]]});
+
+const ITEM_CHANCE=0.2;
+const STAR_COST=1000;
+const STAR_GOAL=3;
+const ACQUIRE_COST=2000;
+const ACQUIRE_DISCOUNT_COST=1000;
+const REBEL_COST=1000;
+const START_CASH=2000;
 
 
-// Pure investment rules. The host owns mutations; guests send requests only.
-const investmentTiles=[5,11,17,23];
-const investmentRules={price:200,limit:2,min:0,max:400,step:50,majorStep:100,majorThreshold:150};
-function investmentState(game){return game.investmentModule ||= {version:1,serial:0,cards:[],boughtTurns:[],lastChanges:[]};}
-function investmentTurn(game){return `${game.round}:${game.players[game.turnIndex]?.id}`;}
-function investmentCards(game,ownerId){return investmentState(game).cards.filter(c=>c.ownerId===ownerId);}
-function investmentValue(game,roleId){const p=game.players.find(p=>p.roleId===roleId);return p?investmentCards(game,p.id).reduce((n,c)=>n+c.value,0):0;}
-function investmentCheck(game,playerId,turn){
- if(game.status!=='playing'||game.phase!=='manage'||game.players[game.turnIndex]?.id!==playerId)throw Error('只能在自己的經營回合交易。');
- if(game.auctionModule?.active)throw Error('請先完成商機競標。');
- if(turn!==investmentTurn(game))throw Error('這是上一回合的操作，請使用最新畫面。');
-}
-function investmentBuy(game,playerId,targetRole,turn){
- investmentCheck(game,playerId,turn);const mod=investmentState(game),p=game.players.find(p=>p.id===playerId);
- if(!investmentTiles.includes(p.position))throw Error('停在投資格才能買入。');
- if(!game.players.some(p=>p.roleId===targetRole&&p.id!==playerId))throw Error('請投資其他玩家的企業。');
- if(mod.boughtTurns.includes(turn))throw Error('這回合已投資過一張。');
- if(investmentCards(game,playerId).length>=investmentRules.limit)throw Error('最多持有兩張，請先賣出。');
- const company=game.companies[p.roleId];if(company.cash<investmentRules.price)throw Error('現金不足 200。');
- company.cash-=investmentRules.price;const card={id:++mod.serial,ownerId:playerId,targetRole,cost:investmentRules.price,value:investmentRules.price,lastDelta:0};mod.cards.push(card);mod.boughtTurns.push(turn);
- game.log.unshift(`【投資】${p.name}支付 200 投資${game.players.find(p=>p.roleId===targetRole).name}的企業。`);return card;
-}
-function investmentSell(game,playerId,cardId,turn){
- investmentCheck(game,playerId,turn);const mod=investmentState(game),i=mod.cards.findIndex(c=>c.id===cardId&&c.ownerId===playerId);if(i<0)throw Error('找不到自己的投資卡，可能已經賣出。');
- const [card]=mod.cards.splice(i,1),p=game.players.find(p=>p.id===playerId);game.companies[p.roleId].cash+=card.value;
- game.log.unshift(`【賣出】${p.name}收回 ${card.value}，投資損益 ${card.value-card.cost>=0?'+':''}${card.value-card.cost}。`);return card.value;
-}
-function investmentEvent(game,before,after,eventName){
- const mod=investmentState(game);mod.lastChanges=[];
- for(const c of mod.cards){const impact=(after[c.targetRole]??0)-(before[c.targetRole]??0);if(Math.abs(impact)<.01)continue;
- const step=Math.sign(impact)*(Math.abs(impact)>=investmentRules.majorThreshold?investmentRules.majorStep:investmentRules.step),old=c.value;
- c.value=Math.min(investmentRules.max,Math.max(investmentRules.min,old+step));c.lastDelta=c.value-old;
- mod.lastChanges.push({id:c.id,ownerId:c.ownerId,targetRole:c.targetRole,from:old,to:c.value,delta:c.lastDelta,eventName});
- }
- if(mod.lastChanges.length)game.log.unshift(`【投資變動】${eventName}：${mod.lastChanges.map(c=>`${c.from} → ${c.to}`).join('、')}`);
-}
+// ============================================================================
+// 派對擴充資料層（非破壞性新增）
+// 所有新模式、神話道具、特殊格、輪盤與決策都集中在這個檔案。
+// ============================================================================
+
+const GAME_MODES = {
+  star: {
+    id: 'star',
+    name: '企業之星',
+    short: '企業之星',
+    icon: '🌟',
+    cup: '企業之星盃',
+    color: '#ca9451',
+    desc: '起步後每次經過或踩到起始格都能購買星星，只有「在起始格買星」會讓星價上漲；達到房間設定的勝利星數後，當季結算星數最高的獲勝！',
+    win: '先拿到房間設定的勝利星數；或當季結算時星數最高。',
+    defaultRounds: 20,
+    defaultTarget: 3,
+    starGoal: 3
+  },
+  tycoon: {
+    id: 'tycoon',
+    name: '首富競爭',
+    short: '首富競爭',
+    icon: '💰',
+    cup: '首富競爭盃',
+    color: '#c55d5d',
+    desc: '達到房間設定的總資產目標即獲勝。季數過半通膨 2 倍，倒數兩季通膨 4 倍，總資產瞬間變薄也瞬間暴漲。',
+    win: '總資產率先達到房間設定的目標；季末比較總資產。',
+    defaultRounds: 30,
+    defaultTarget: 8000,
+    starGoal: 3
+  },
+  evil: {
+    id: 'evil',
+    name: '邪惡企業',
+    short: '邪惡企業',
+    icon: '💀',
+    cup: '邪惡企業盃',
+    color: '#7a60ad',
+    desc: '生存模式。每 5 季杜芬舒斯大樓發射雷射收保護費，付不出來就變成藍色幽靈，直到只剩唯一的倖存者。',
+    win: '成為唯一的倖存者；季末比較生還季數。',
+    defaultRounds: 20,
+    defaultTarget: 0,
+    starGoal: 3
+  },
+  random: {
+    id: 'random',
+    name: '隨機模式',
+    short: '隨機',
+    icon: '🎲',
+    cup: '命運隨機盃',
+    color: '#5979b0',
+    desc: '開局時從企業之星、首富競爭、邪惡企業中隨機抽一種模式，抽到什麼就玩什麼。',
+    win: '依隨機抽到的模式決定。',
+    defaultRounds: 12,
+    defaultTarget: 0,
+    starGoal: 3
+  }
+};
+
+const MODE_IDS = ['star', 'tycoon', 'evil'];
+
+const RANDOM_ROLE_ID = 'random';
+
+// 十大企業翻新：保留原本十個角色欄位與顏色，全面換成派對化技能。
+const PARTY_ROLES = [
+  {
+    id: 'social', name: '社群媒體巨頭', sector: '科技業', icon: '📱',
+    skill: {
+      id: 'burn', name: '炎上商法', icon: '🔥', target: 'opponent',
+      desc: '指定對手下回合套用 123 骰子，且踩紅格扣款翻倍。'
+    }
+  },
+  {
+    id: 'hardware', name: '智慧硬體大廠', sector: '製造業', icon: '⌚',
+    skill: {
+      id: 'obsolete', name: '計畫性報廢', icon: '🧨', target: 'opponent',
+      desc: '摧毀對手 1 個道具，並轉化為自己 200 總資產。'
+    }
+  },
+  {
+    id: 'ecommerce', name: '電商平台寡頭', sector: '消費業', icon: '🛒',
+    skill: {
+      id: 'shopping', name: '購物節狂歡', icon: '🎁', target: 'none',
+      desc: '立刻吸取全場對手各 80 元，且本回合自己踩格效果無效化（無敵）。'
+    }
+  },
+  {
+    id: 'investment', name: '吸血投資集團', sector: '金融業', icon: '🩸',
+    skill: {
+      id: 'short', name: '惡意做空', icon: '📉', target: 'opponent',
+      desc: '偷取 150 元；若對方總資產低於你，額外偷 1 個道具。'
+    }
+  },
+  {
+    id: 'fastfood', name: '跨國速食連鎖', sector: '消費業', icon: '🍔',
+    skill: {
+      id: 'junk', name: '垃圾食物成癮', icon: '🍟', target: 'none',
+      desc: '全場對手扣 100 元，每扣成功一人自己回饋 50 元。'
+    }
+  },
+  {
+    id: 'delivery', name: '外送平台巨頭', sector: '能源與運輸', icon: '🛵',
+    skill: {
+      id: 'ghostOrder', name: '幽靈派單', icon: '👻', target: 'tile',
+      desc: '將罷工幽靈隨意放置在地圖上任意格（出發格除外）。'
+    }
+  },
+  {
+    id: 'bank', name: '傳統金控銀行', sector: '金融業', icon: '🏦',
+    skill: {
+      id: 'freeze', name: '凍結帳戶', icon: '❄️', target: 'opponent',
+      desc: '指定對手下回合經過出發格絕對無法買星，且禁用道具。'
+    }
+  },
+  {
+    id: 'property', name: '炒房地產集團', sector: '民生業', icon: '🏗️',
+    skill: {
+      id: 'seize', name: '強制徵收', icon: '🚜', target: 'opponent',
+      desc: '與對手同格或經過時，強制將對方擊退 3 格並搶奪 200 元。'
+    }
+  },
+  {
+    id: 'green', name: '綠能生技集團', sector: '能源與運輸', icon: '🌱',
+    skill: {
+      id: 'carbon', name: '碳稅制裁', icon: '🌫️', target: 'none',
+      desc: '自動鎖定全場總資產最高者，強制扣 300 元。'
+    }
+  },
+  {
+    id: 'cloud', name: '雲端駭客組織', sector: '科技業', icon: '🕶️',
+    skill: {
+      id: 'zeroDay', name: '零日漏洞', icon: '💻', target: 'opponent',
+      desc: '無視護盾，隨機竊取對方 1 點技能能量或 1 個道具。'
+    }
+  }
+];
+
+const UNDECIDED_ROLE = {
+  id: RANDOM_ROLE_ID,
+  name: '未定新創集團',
+  sector: '尚未決定',
+  icon: '🎲',
+  skill: {
+    id: 'randomize', name: '命運未定', icon: '🎲', target: 'none',
+    desc: '進入遊戲後隨機分配一家企業與其專屬技能。'
+  }
+};
+
+const LOBBY_ROLES = [...PARTY_ROLES, UNDECIDED_ROLE];
+
+const MYTHIC_ITEMS = [
+  {
+    id: 'totem', name: '不死圖騰', icon: '🗿', mode: 'evil', kind: 'passive',
+    desc: '抵禦一次雷射處決，觸發後銷毀。'
+  },
+  {
+    id: 'indulgence', name: '贖罪券', icon: '🎫', kind: 'passive', charges: 5,
+    desc: '被動絕對防禦。自動銷毀並抵銷 5 次扣總資產效果（移形換位代價除外）。'
+  },
+  {
+    id: 'vector', name: '矢量操作', icon: '⬆️', kind: 'active',
+    desc: '擲骰前在地圖上指定 1 個格子。本回合自己移動時，出發格、沿途與最後停留格上的其他玩家，會立刻被傳送到該格並強制觸發格子效果；使用一次即消耗。'
+  },
+  {
+    id: 'truthGate', name: '真理之門', icon: '🚪', kind: 'active', charges: 3,
+    desc: '可使用3次。可將 1,000 總資產變成指定普通道具，或把 1 個道具煉成 1,000 總資產。'
+  },
+  {
+    id: 'starBlade', name: '斬魄刀', icon: '🗡️', mode: 'star', kind: 'passive',
+    desc: '基礎型態，沒有特殊效果。持有者獲得星星後自動進化為「卍解」；若星星失去則退化回斬魄刀。'
+  },
+  {
+    id: 'bankai', name: '卍解', icon: '🌀', mode: 'star', kind: 'passive', hidden: true,
+    desc: '斬魄刀進化型態：收益 +100、免疫負面效果，但禁止獲取新道具。星星被偷走時退化回斬魄刀。'
+  },
+  {
+    id: 'iceMushroom', name: '寒冰蘑菇', icon: '❄️', kind: 'active',
+    desc: '凍結其餘玩家 1 回合，並在 3 回合期間禁用他們的技能與道具。'
+  },
+  {
+    id: 'witchFactor', name: '魔女因子', icon: '🦠', kind: 'passive',
+    desc: '被動持有。碰觸幽靈即觸發「死亡回歸」，全場狀態回溯至本次擲骰前。'
+  },
+  {
+    id: 'weakDomain', name: '弱者的領域', icon: '🌐', kind: 'active',
+    desc: '展開 3 格藍框領域一回合，進入者扣 100；範圍內他人禁用技能／道具。代價：下回合只能走 1 步且禁用換骰道具。'
+  }
+];
+
+const MYTHIC_BY_ID = Object.fromEntries(MYTHIC_ITEMS.map(x => [x.id, x]));
+
+// 系統特殊道具：獨立於普通道具與黑市神話道具，不列入遊戲規則說明書。
+const SPECIAL_ITEMS = [
+  {
+    id: 'fateDice', name: '命運骰子', icon: '🎲', kind: 'active', special: true,
+    desc: '使用後展開 2×3 骰面，自選 1–6 步強制前進；使用一次後消失。'
+  }
+];
+
+const SPECIAL_ITEM_BY_ID = Object.fromEntries(SPECIAL_ITEMS.map(x => [x.id, x]));
+
+const FATE_DICE_ID = 'fateDice';
+const TYCOON_BLUE_REWARD = 500;
+const TYCOON_COMEBACK_SEASONS = 3;
+
+const SPECIAL_TILE_META = {
+  market: { label: '黑市', icon: '🛒', color: 'purple', desc: '隱藏神話道具拍賣：起標 1,000，每次抬價 250。' },
+  invest: { label: '投資', icon: '📈', color: 'orange', desc: '投入 50% 總資產換取股票憑證，季末結算暴漲或歸零。' },
+  tax: { label: '查稅局', icon: '🏛️', color: 'black', desc: '二選一：繳 50% 總資產，或強制羈押 2 回合。' },
+  insider: { label: '內線交易', icon: '🌈', color: 'rainbow', desc: '花 100 啟動命運輪盤，用完後轉為普通格並在別處重生。' }
+};
+
+const SPECIAL_COUNTS = { market: 3, invest: 2, tax: 1, insider: 1 };
+
+const NORMAL_TILE_TYPES = ['blue', 'red', 'yellow', 'green'];
+
+const WHEEL_EFFECTS = [
+  { id: 'stealStar', name: '偷星', icon: '🌟', tone: 'star', mode: 'star', desc: '隨機偷走一位對手 1 顆星。' },
+  { id: 'earlyDoom', name: '提早末日', icon: '💀', tone: 'evil', mode: 'evil', desc: '立刻提前觸發一次毀滅日收保護費。' },
+  { id: 'windfall', name: '天降橫財', icon: '💸', tone: 'good', desc: '立刻獲得 5,000 總資產。' },
+  { id: 'halve', name: '資產腰斬', icon: '✂️', tone: 'bad', desc: '自己的總資產立刻減半。' },
+  { id: 'supply', name: '道具補給 x2', icon: '🎒', tone: 'good', desc: '立刻抽 2 個道具。' },
+  { id: 'darkweb', name: '暗網走私', icon: '🕶️', tone: 'good', desc: '獲得 1 個隨機隱藏神話道具。' },
+  { id: 'overnight', name: '一夜暴富', icon: '🤑', tone: 'good', desc: '立刻獲得 2,000 總資產。' },
+  { id: 'haunt', name: '幽靈纏身', icon: '👻', tone: 'bad', desc: '指定一位玩家立刻撞上罷工幽靈。' },
+  { id: 'discountStar', name: '特價星', icon: '⭐', tone: 'star', mode: 'star', desc: '立刻以 500 總資產買下 1 顆星。' },
+  { id: 'redistribute', name: '財富重分配', icon: '💱', tone: 'special', desc: '與總資產第一名交換總資產；自己第一名則無效。' },
+  { id: 'robinHood', name: '劫富濟貧', icon: '🥣', tone: 'special', mode: 'tycoon', desc: '（首富限定）與最後一名交換總資產。' },
+  { id: 'sucker', name: '含淚當盤子', icon: '🤡', tone: 'special', mode: 'star', desc: '（企業之星限定）強迫送 1 顆星給星數最少的玩家；自己無星則無效。' }
+];
+
+const QUICK_DECISIONS = [
+  {
+    id: 'labor', name: '勞資關係', icon: '🤝',
+    text: '工會代表把一份連署書放在你桌上，要求改善輪班與加班費。',
+    options: [
+      { id: 'invest', label: 'A · 加薪留才', icon: '🧑‍🏭', desc: '支付 200，換取 1 點技能能量。', cash: -200, energy: 1 },
+      { id: 'squeeze', label: 'B · 裁員節流', icon: '📋', desc: '獲得 300，但失去 1 點技能能量。', cash: 300, energy: -1 }
+    ]
+  },
+  {
+    id: 'rnd', name: '研發與變現', icon: '🔬',
+    text: '實驗室做出一個能改變市場的原型，但量產需要總資產。',
+    options: [
+      { id: 'invest', label: 'A · 投入研發', icon: '🧪', desc: '支付 400，獲得 2 點技能能量。', cash: -400, energy: 2 },
+      { id: 'squeeze', label: 'B · 出售專利', icon: '💼', desc: '獲得 600，但失去 1 點技能能量。', cash: 600, energy: -1 }
+    ]
+  },
+  {
+    id: 'supply', name: '供應鏈決策', icon: '🚚',
+    text: '關鍵零件突然缺貨，供應商給你兩個方案。',
+    options: [
+      { id: 'invest', label: 'A · 簽長約鎖價', icon: '📦', desc: '支付 300，獲得 1 點能量與 1 層護盾。', cash: -300, energy: 1, shields: 1 },
+      { id: 'squeeze', label: 'B · 現貨掃貨', icon: '🏷️', desc: '獲得 200，但失去 1 點技能能量。', cash: 200, energy: -1 }
+    ]
+  },
+  {
+    id: 'pr', name: '公關危機', icon: '📰',
+    text: '一篇爆料文在深夜衝上熱搜，董事會等你表態。',
+    options: [
+      { id: 'invest', label: 'A · 道歉捐款', icon: '🙇', desc: '支付 250，獲得 1 層護盾。', cash: -250, shields: 1 },
+      { id: 'squeeze', label: 'B · 硬拗到底', icon: '📢', desc: '獲得 150，但失去 1 點技能能量。', cash: 150, energy: -1 }
+    ]
+  },
+  {
+    id: 'spy', name: '商業間諜', icon: '🕵️',
+    text: '對手的研究員願意用一個隨身碟換一筆錢。',
+    options: [
+      { id: 'invest', label: 'A · 買下情報', icon: '💾', desc: '支付 350，獲得 2 點技能能量。', cash: -350, energy: 2 },
+      { id: 'squeeze', label: 'B · 反向操作', icon: '📉', desc: '獲得 250，但失去 1 點技能能量。', cash: 250, energy: -1 }
+    ]
+  },
+  {
+    id: 'market', name: '市場投資', icon: '📊',
+    text: '分析師遞來兩份報告，一份保守、一份激進。',
+    options: [
+      { id: 'invest', label: 'A · 加碼布局', icon: '🚀', desc: '支付 500，獲得 250 的股票憑證與 1 點技能能量。', cash: -500, energy: 1, certificate: 250 },
+      { id: 'squeeze', label: 'B · 落袋為安', icon: '💵', desc: '獲得 200 並保留總資產。', cash: 200 }
+    ]
+  }
+];
+
+const QUICK_DECISION_FALLBACK = {
+  id: 'nothing', label: 'C · 什麼都不做', icon: '🚪',
+  desc: '不採取任何行動，但扣除 100 總資產（可負債，最低常駐可選）。', cash: -100, allowDebt: true
+};
+
+const STAR_PRICE_START = 500;
+const STAR_PRICE_STEP = 500;
+const FORCED_STAR_PREMIUM = 300;
+const TYCOON_TARGET = 8000;
+const DOOM_START = 1000;
+const DOOM_STEP = 500;
+const DOOM_EVERY = 5;
+const MAX_PLAYERS = 8;
+
+const SPECIAL_TILE_KEYS = Object.keys(SPECIAL_TILE_META);
 
 
+
+// 擴充掛鉤：party_engine.js 會註冊這些回呼，原始規則完全保留。
+const engineHooks={};
+function boardOf(state){return Array.isArray(state?.board)&&state.board.length?state.board:BOARD}
 
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const round2=n=>Math.round((n+Number.EPSILON)*100)/100;
-const div=(a,b)=>b===0||b==null?null:a/b;
-const pct=(a,b)=>{const x=div(a,b);return x===null?null:100*(x-1)};
 const roleById=id=>ROLES.find(r=>r.id===id);
-const eventById=id=>ALL_EVENTS.find(e=>e.id===id);
+const itemById=id=>ITEMS.find(x=>x.id===id);
+const eventById=id=>PARTY_EVENTS.find(e=>e.id===id);
 const nextRandom=state=>{let x=state.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.rng=x|0;return (x>>>0)/4294967296};
+const pick=(state,items)=>items[Math.floor(nextRandom(state)*items.length)];
 const ghostSeed=seed=>((Number(seed)|0)^0x6d2b79f5)||1;
 const nextGhostRandom=state=>{let x=state.ghostRng|0;x^=x<<13;x^=x>>>17;x^=x<<5;state.ghostRng=x|0;return (x>>>0)/4294967296};
+const currentPlayer=state=>state.players[state.turnIndex];
+
+function log(state,text){state.log.unshift(`第 ${state.round} 季｜${text}`);if(state.log.length>200)state.log.length=200}
+
 function ensureGhostState(state){
   if(!Number.isInteger(state.ghostRng)||state.ghostRng===0)state.ghostRng=ghostSeed(state.seed);
   if(!Number.isInteger(state.ghostPosition)||state.ghostPosition<0||state.ghostPosition>=BOARD.length)state.ghostPosition=1+Math.floor(nextGhostRandom(state)*(BOARD.length-1));
   if(!Array.isArray(state.ghostTrail))state.ghostTrail=[];
-  if(!Array.isArray(state.struckPlayerIds))state.struckPlayerIds=[];
 }
+
+const CORNER_MARKS={0:'red',6:'green',12:'yellow',18:'blue'};
+const EMPTY_CORNER_MARKS=()=>({red:false,green:false,blue:false,yellow:false});
+
+function applyCornerProgress(state,player,path,{passedStart=false,effects=null}={}){
+  if(!player)return null;
+  const marks=player.marks&&typeof player.marks==='object'?player.marks:{};
+  player.marks={red:marks.red===true,green:marks.green===true,blue:marks.blue===true,yellow:marks.yellow===true};
+  const colors=[];
+  for(const index of path||[]){
+    const color=CORNER_MARKS[index];
+    if(color&&!player.marks[color]){
+      player.marks[color]=true;
+      colors.push(color);
+      log(state,`📍 ${player.name} 取得${color==='red'?'紅色':color==='green'?'綠色':color==='blue'?'藍色':'黃色'}角落記號。`);
+      effects?.push({icon:'📍',text:`取得${color==='red'?'紅色':color==='green'?'綠色':color==='blue'?'藍色':'黃色'}角落記號`,tone:'good'});
+    }
+  }
+  if(!passedStart||player.position===0||!Object.values(player.marks).every(Boolean))return null;
+  const previousNoInflation=state.ext?.noInflation;
+  if(state.ext)state.ext.noInflation=true;
+  let amount;
+  try{amount=addCash(state,player,1000)}finally{if(state.ext)state.ext.noInflation=previousNoInflation}
+  player.marks=EMPTY_CORNER_MARKS();
+  const event={type:'cornerSubsidy',playerId:player.id,playerName:player.name,amount,at:Date.now()};
+  state.cornerSubsidyEvent=event;
+  log(state,`🚩 ${player.name} 集齊四角記號，經過出發點領取 1,000 元補助金，記號已清除。`);
+  effects?.push({icon:'🚩',text:'集齊四角記號，領取 1,000 元補助金',tone:'good'});
+  return event;
+}
+
+function ensurePartyState(state){
+  state.version=2;
+  state.mode='party';
+  if(!Array.isArray(state.board)||state.board.length<8)state.board=BOARD.map(t=>({...t}));
+  if(!Number.isInteger(state.round)||state.round<1)state.round=1;
+  if(!Number.isInteger(state.maxRounds)||state.maxRounds<2)state.maxRounds=10;
+  state.starGoal=STAR_GOAL;
+  if(!Array.isArray(state.players))throw Error('存檔缺少玩家資料。');
+  state.turnIndex=clamp(Number(state.turnIndex)||0,0,state.players.length-1);
+  state.rng=Number.isInteger(state.rng)&&state.rng!==0?state.rng:(Number(state.seed)|0)||1;
+  state.effects=state.effects&&typeof state.effects==='object'?state.effects:{};
+  if(!Array.isArray(state.log))state.log=[];
+  if(!state.turnGains||typeof state.turnGains!=='object')state.turnGains={};
+  if(!Array.isArray(state.winnerIds))state.winnerIds=[];
+  if(!state.status)state.status='playing';
+  if(!state.phase)state.phase=state.status==='finished'?'finished':'roll';
+  if(state.status==='finished')state.phase='finished';
+  if(!state.lastRoll)state.lastRoll=null;
+  if(!state.pendingDecision)state.pendingDecision=null;
+  if(!state.pendingLanding||typeof state.pendingLanding!=='object')state.pendingLanding=null;
+  if(!state.cornerSubsidyEvent||typeof state.cornerSubsidyEvent!=='object')state.cornerSubsidyEvent=null;
+  for(const p of state.players){
+    p.cash=Number.isFinite(p.cash)?round2(p.cash):START_CASH;
+    p.stars=Number.isInteger(p.stars)?p.stars:0;
+    p.energy=Number.isInteger(p.energy)?clamp(p.energy,0,9):1;
+    p.shields=Number.isInteger(p.shields)?p.shields:0;
+    p.items=Array.isArray(p.items)?p.items.filter(id=>itemById(id)).slice(0,3):[];
+    const marks=p.marks&&typeof p.marks==='object'?p.marks:{};
+    p.marks={red:marks.red===true,green:marks.green===true,blue:marks.blue===true,yellow:marks.yellow===true};
+    p.position=Number.isInteger(p.position)?p.position:0;
+    p.skipTurns=Number.isInteger(p.skipTurns)?p.skipTurns:0;
+    p.rentTurns=Number.isInteger(p.rentTurns)?p.rentTurns:0;
+    p.rentTo=p.rentTo||null;
+    p.parentId=p.parentId||null;
+    p.leverage=Boolean(p.leverage);
+    p.bankLock=Boolean(p.bankLock);
+    p.noReward=Boolean(p.noReward);
+    p.forcedRed=Boolean(p.forcedRed);
+    p.forcedSteps=['low','high'].includes(p.forcedSteps)?p.forcedSteps:null;
+    if(!Number.isInteger(p.color))p.color=state.players.indexOf(p);
+  }
+  ensureGhostState(state);
+  for(const p of state.players)if(!Number.isFinite(state.turnGains[p.id]))state.turnGains[p.id]=0;
+  return state;
+}
+
+function createGame({players,seed=Date.now(),maxRounds=10,startingCash=START_CASH}){
+  if(!Array.isArray(players)||players.length<2||players.length>8)throw Error('請選擇 2 至 8 位玩家。');
+  const validRole=id=>engineHooks.roleExists?engineHooks.roleExists(id):Boolean(roleById(id));
+  if(new Set(players.map(p=>p.roleId)).size!==players.length||players.some(p=>!validRole(p.roleId)))throw Error('每位玩家需要不同的企業角色。');
+  const names=players.map(p=>String(p.name||'').trim());
+  if(names.some(n=>!n)||new Set(names).size!==names.length)throw Error('玩家名稱不得空白或重複。');
+  const n=Number(seed),limit=Number(maxRounds),cash=Number(startingCash);
+  if(!Number.isInteger(n))throw Error('亂數種子無效。');
+  if(!Number.isInteger(limit)||limit<2||limit>30)throw Error('季數上限須為 2–30。');
+  if(!Number.isFinite(cash)||cash<0)throw Error('玩家初始總資產須為 0 以上。');
+  const state={version:2,mode:'party',board:BOARD.map(t=>({...t})),net:null,round:1,maxRounds:limit,starGoal:STAR_GOAL,turnIndex:0,phase:'roll',rng:n|0||1,seed:n,
+    players:players.map((p,i)=>({id:`player-${i+1}`,name:names[i],roleId:p.roleId,position:0,color:i,cash:round2(cash),stars:0,energy:1,items:[],marks:EMPTY_CORNER_MARKS(),shields:0,skipTurns:0,rentTo:null,rentTurns:0,parentId:null,leverage:false,bankLock:false,noReward:false,forcedRed:false,forcedSteps:null})),
+    ghostRng:ghostSeed(n),ghostPosition:0,ghostTrail:[],
+    effects:{},turnGains:{},lastRoll:null,pendingDecision:null,pendingLanding:null,
+    log:[],status:'playing',resultReason:null,winnerIds:[],sync:null,ext:null,cornerSubsidyEvent:null};
+  ensureGhostState(state);
+  state.ghostPosition=1+Math.floor(nextGhostRandom(state)*(BOARD.length-1));
+  state.log.unshift(`第 1 季｜派對開始！率先拿下 ${STAR_GOAL} 顆併購星就獲勝。`);
+  startTurn(state);
+  return state;
+}
+
+function addCash(state,player,amount){
+  if(!amount)return 0;
+  if(engineHooks.adjustCash)amount=engineHooks.adjustCash(state,player,amount);
+  // 全域扣款攔截：贖罪券等被動防禦必須在現金變動前生效，避免先觸發負債淘汰。
+  if(amount<0&&engineHooks.beforeCash){
+    const adjusted=engineHooks.beforeCash(state,player,amount);
+    if(adjusted===false)return 0;
+    if(Number.isFinite(adjusted))amount=adjusted;
+    if(!amount)return 0;
+  }
+  player.cash=round2(player.cash+amount);
+  if(amount>0&&state.turnGains)state.turnGains[player.id]=round2((state.turnGains[player.id]||0)+amount);
+  if(engineHooks.afterCash)engineHooks.afterCash(state,player,amount);
+  return amount;
+}
+
+function consumeShield(state,target,label){
+  if(target.shields>0){
+    target.shields--;
+    log(state,`🛡️ ${target.name} 的護盾擋下了「${label}」。`);
+    return true;
+  }
+  return false;
+}
+
+function drawItem(state,player){
+  if(engineHooks.canDrawItem&&!engineHooks.canDrawItem(state,player))return null;
+  if(player.items.length>=3)return null;
+  const item=pick(state,ITEMS);
+  player.items.push(item.id);
+  if(engineHooks.itemAcquired)engineHooks.itemAcquired(state,player,item.id);
+  log(state,`${player.name} 在回合開始抽到道具「${item.icon} ${item.name}」。`);
+  return item;
+}
+
+function finish(state,reason,winners){
+  if(engineHooks.beforeFinish)engineHooks.beforeFinish(state,reason,winners);
+  state.status='finished';
+  state.phase='finished';
+  state.resultReason=reason;
+  state.winnerIds=winners.map(p=>p.id);
+  state.pendingDecision=null;
+  state.pendingLanding=null;
+  log(state,`🏁 對局結束｜${winners.length?winners.map(p=>p.name).join('、'):'無人'}勝出。`);
+}
+
+function checkStarWin(state){
+  const leaders=state.players.filter(p=>p.stars>=STAR_GOAL);
+  if(!leaders.length)return false;
+  finish(state,'stars',leaders);
+  return true;
+}
+
 function moveGhost(state){
+  if(engineHooks.moveGhost)return engineHooks.moveGhost(state);
   const steps=1+Math.floor(nextGhostRandom(state)*3),direction=nextGhostRandom(state)<.5?-1:1;
   const from=state.ghostPosition;
   state.ghostTrail=[from,...Array.from({length:steps},(_,i)=>(from+direction*(i+1)+BOARD.length)%BOARD.length)];
   state.ghostPosition=state.ghostTrail.at(-1);
 }
-const pick=(state,items)=>items[Math.floor(nextRandom(state)*items.length)];
-const hasTarget=(effect,role)=>effect.target==='all'||effect.target==='interest_negative'&&role.base.interest<0||effect.target==='except_technology'&&role.id!=='technology'||effect.target.split(',').includes(role.id);
-const eventAffects=(active,role,state)=>active.scope==='global'||active.scope==='sector'&&active.sector===role.sector||active.scope==='personal'&&state.players.some(p=>p.id===active.ownerId&&p.roleId===role.id);
 
-function eventRemaining(active,round){const e=eventById(active.eventId);return e?Math.max(0,e.duration-(round-active.startedRound)):0}
-function effectBreakdown(state,roleId,metric,round=state.round){
-  const role=roleById(roleId);
-  if(!role)return [];
-  return state.activeEvents.flatMap(a=>{
-    const e=eventById(a.eventId),age=round-a.startedRound;
-    if(!e||age<0||age>=e.duration||!eventAffects(a,role,state))return [];
-    return e.effects.filter(f=>f.metric===metric&&hasTarget(f,role)).map(f=>({eventId:e.id,name:e.name,pct:f.pct*e.decay[age],remaining:e.duration-age,scope:a.scope,instanceId:a.instanceId}));
-  });
-}
-function metricPct(state,roleId,metric,round=state.round){return clamp(effectBreakdown(state,roleId,metric,round).reduce((n,x)=>n+x.pct,0),-60,100)}
-function assetValue(state,roleId,round=state.round){const c=state.companies[roleId];return round2(c.assetReferenceValue*(1+metricPct(state,roleId,'asset_value',round)/100))+investmentValue(state,roleId)}
-function financials(state,roleId,round=state.round){
-  const role=roleById(roleId),c=state.companies[roleId],flows={};
-  const d=state.fedRatePercent-4;
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  for(const m of METRICS){
-    const base=role.base[m];
-    if(!base){flows[m]=0;continue}
-    let extra=0;
-    if(m==='interest')extra=(base<0?40:roleId==='bank'?30:0)*d+(base<0?(program==='QE'?-10:program==='QT'?10:0):0);
-    const headFactor=m==='labor'?c.headcount/role.baseHeadcount:1;
-    flows[m]=round2(Math.sign(base)*Math.abs(base)*headFactor*Math.max(0,1+clamp(metricPct(state,roleId,m,round)+extra,-60,100)/100));
+function startTurn(state){
+  if(state.status!=='playing')return;
+  const p=currentPlayer(state);
+  state.turnGains[p.id]=0;
+  p.leverage=false;
+  p.forcedSteps=null;
+  state.lastRoll=null;
+  state.pendingDecision=null;
+  state.pendingLanding=null;
+  if(p.shields>0){
+    log(state,`🛡️ ${p.name} 的 ${p.shields} 層護盾在回合開始時到期。`);
+    p.shields=0;
   }
-  const ownerId=state.players.find(p=>p.roleId===roleId)?.id;
-  if(round===state.round&&state.struckPlayerIds?.includes(ownerId))for(const m of METRICS)if(flows[m]>0)flows[m]=0;
-  const revenue=flows.revenue,costs=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v<0).reduce((s,[,v])=>s+v,0),otherIncome=Object.entries(flows).filter(([m,v])=>m!=='revenue'&&v>0).reduce((s,[,v])=>s+v,0);
-  const bonus=round===state.round&&state.struckPlayerIds?.includes(ownerId)?0:auctionBonus(state,roleId,round,{costs});
-  flows.investment=(flows.investment||0)+bonus;
-  return {flows,revenue,costs:round2(costs),otherIncome:round2(otherIncome+bonus),profit:round2(Object.values(flows).reduce((s,v)=>s+v,0)),assetValue:assetValue(state,roleId,round)};
+  if(engineHooks.startTurn)engineHooks.startTurn(state,p);
+  drawItem(state,p);
+  if(p.rentTo&&p.rentTurns>0){
+    const owner=state.players.find(x=>x.id===p.rentTo);
+    if(owner&&!consumeShield(state,p,'炒地皮租金')){
+      addCash(state,p,-100);
+      addCash(state,owner,100);
+      log(state,`🏗️ ${p.name} 支付 ${owner.name} 100 租金（剩 ${p.rentTurns-1} 回合）。`);
+    }
+    p.rentTurns--;
+    if(p.rentTurns<=0){p.rentTo=null;p.rentTurns=0}
+  }
+  if(p.skipTurns>0){
+    p.skipTurns--;
+    state.phase='skipped';
+    log(state,`⏸️ ${p.name} 的企業暫停行動，這回合直接跳過。`);
+    return;
+  }
+  state.phase='roll';
+  log(state,`${p.name} 的回合開始，請在擲骰前使用道具或企業技能。`);
 }
-function companyPosition(state,roleId){const c=state.companies[roleId];return {cash:c.cash,assetValue:assetValue(state,roleId),debt:c.debt,netWorth:c.cash+assetValue(state,roleId)-c.debt}}
 
-function createGame({players,seed=Date.now(),targetWealth=5500,maxRounds=12}){
-  if(!Array.isArray(players)||players.length<2||players.length>8)throw Error('請選擇 2 至 8 位玩家。');
-  if(new Set(players.map(p=>p.roleId)).size!==players.length||players.some(p=>!roleById(p.roleId)))throw Error('每位玩家需要不同的企業角色。');
-  const names=players.map(p=>String(p.name||'').trim());
-  if(names.some(n=>!n)||new Set(names).size!==names.length)throw Error('玩家名稱不得空白或重複。');
-  const n=Number(seed),goal=Number(targetWealth),limit=Number(maxRounds);
-  if(!Number.isInteger(n)||!Number.isFinite(goal)||goal<2000||!Number.isInteger(limit)||limit<2||limit>50)throw Error('種子、目標或回合上限無效。');
-  const state={version:1,round:1,turnIndex:0,phase:'roll',rng:n|0||1,seed:n,players:players.map((p,i)=>({id:`player-${i+1}`,name:names[i],roleId:p.roleId,position:0,color:i})),companies:Object.fromEntries(ROLES.map(r=>[r.id,{cash:1200,assetReferenceValue:800,headcount:r.baseHeadcount,debt:0}])),activeEvents:[],eventSerial:0,bank:{liquidAssets:300,shortTermLiabilities:1000,totalLoans:1000,nonperformingLoans:40,rescues:[],riskRestrictionUntil:0},initialStockIndex:100,initialTotalLoans:1000,fedRatePercent:4,lastRateDecisionRound:null,monetaryProgram:null,economicHistory:[],evaluations:[],decisions:[],log:[],dice:null,reels:null,lastDraw:null,targetWealth:goal,maxRounds:limit,status:'playing',winnerIds:[]};
-  ensureGhostState(state);
-  return state;
-}
-
-function drawForTile(state,tile,ownerId){
-  let event,scope=tile.type,sector=null;
-  if(scope==='global')event=pick(state,GLOBAL_EVENTS);
-  else if(scope==='personal')event=pick(state,PERSONAL_EVENTS);
-  else if(scope==='sector'){
-    const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];
-    const index=Math.floor((BOARD.indexOf(tile)-3)/3);
-    sector=sectors[((index%sectors.length)+sectors.length)%sectors.length];
-    event=SECTOR_EVENTS.find(e=>e.sector===sector);
-  } else return null;
-  const active={instanceId:++state.eventSerial,eventId:event.id,scope,sector,ownerId:scope==='personal'?ownerId:null,startedRound:state.round};
-  state.activeEvents.push(active);
-  state.lastDraw=active;
-  state.log.unshift(`第 ${state.round} 季｜${state.players.find(p=>p.id===ownerId)?.name||'玩家'}抽到「${event.name}」${scope==='global'?'，影響所有適用企業':scope==='sector'?`，影響${sector}`:'，只影響自己'}。`);
-  return active;
-}
+function currentOf(state){return currentPlayer(state)}
 function movementPath(from,steps,length=BOARD.length){
   if(!Number.isInteger(from)||!Number.isInteger(steps)||!Number.isInteger(length)||from<0||from>=length||steps<0||steps>length||length<2)throw Error('棋盤移動參數無效。');
   return Array.from({length:steps},(_,i)=>(from+i+1)%length);
 }
-function rollDice(state,forced){
-  if(state.status!=='playing'||state.phase!=='roll')throw Error('現在無法啟動拉霸。');
-  const player=state.players[state.turnIndex];
-  const reels=forced??Array.from({length:2},()=>Math.floor(nextRandom(state)*7));
-  if(!Array.isArray(reels)||reels.length!==2||reels.some(n=>!Number.isInteger(n)||n<0||n>6))throw Error('拉霸須有兩個 0–6 的數字。');
-  const dice=reels.reduce((sum,n)=>sum+n,0),old=player.position,fullPath=movementPath(old,dice);
-  const ghostStep=fullPath.indexOf(state.ghostPosition),struck=ghostStep!==-1;
-  const path=struck?fullPath.slice(0,ghostStep+1):fullPath;
-  player.position=path.at(-1)??old;
-  state.lastDraw=null;
-  state.log.unshift(`${player.name}拉出 ${reels.join(' + ')} = ${dice}，${dice===0?'停留原地':struck?`原預計前進 ${dice} 格，遇罷工實際前進 ${path.length} 格`:`前進 ${dice} 格`}。`);
-  if(struck){state.struckPlayerIds.push(player.id);state.log.unshift(`${player.name}走到第 ${player.position} 格撞上罷工幽靈！剩餘步數作廢，本季收入歸零、支出照付，失去這次經營與抽卡機會。`)}
-  if(old+dice>=BOARD.length&&!struck){state.companies[player.roleId].cash+=250;state.log.unshift(`${player.name}經過起點，獲得 250 遊戲幣。`)}
-  state.dice=dice;state.reels=[...reels];
-  const tile=BOARD[player.position];
-  state.phase=struck?'strike':dice>0&&tile.type!=='start'?'draw':'manage';
-  return {dice,reels:[...reels],tile,path,from:old,struck};
-}
-function drawEvent(state){
-  if(state.status!=='playing'||state.phase!=='draw')throw Error('現在不需要抽卡。');
-  const player=state.players[state.turnIndex],tile=BOARD[player.position];
-  if(!state.dice||tile.type==='start')throw Error('目前停格沒有事件卡。');
-  const before=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
-  const active=drawForTile(state,tile,player.id);
-  const after=Object.fromEntries(state.players.map(p=>[p.roleId,financials(state,p.roleId).profit+assetValue(state,p.roleId)]));
-  investmentEvent(state,before,after,eventById(active.eventId)?.name||'市場事件');
-  state.phase='manage';
-  return active;
-}
-function adjustStaff(state,playerId,delta){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段調整員工。');
-  if(!Number.isInteger(delta)||delta===0)throw Error('請輸入非零整數人數。');
-  const p=state.players[state.turnIndex],c=state.companies[p.roleId];
-  const employed=Object.values(state.companies).reduce((s,x)=>s+x.headcount,0);
-  if(c.headcount+delta<0||employed+delta>1000)throw Error('超出可聘僱或可裁員人數。');
-  c.headcount+=delta;state.log.unshift(`${p.name}${delta>0?'聘僱':'裁員'} ${Math.abs(delta)} 人。`);
-}
-function issueLoan(state,playerId,amount){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段借款。');
-  if(!Number.isInteger(amount)||amount<=0||amount>state.bank.liquidAssets||state.bank.riskRestrictionUntil>=state.round)throw Error('借款金額超出銀行流動資產，或目前限制新增風險放款。');
-  const c=state.companies[state.players[state.turnIndex].roleId];c.cash+=amount;c.debt+=amount;state.bank.liquidAssets-=amount;state.bank.totalLoans+=amount;state.log.unshift(`${state.players[state.turnIndex].name}借款 ${amount}；現金及負債同步增加。`);
-}
-function repayLoan(state,playerId,amount){
-  if(state.status!=='playing'||state.phase!=='manage'||state.players[state.turnIndex].id!==playerId)throw Error('只能在自己的經營階段還款。');
-  const c=state.companies[state.players[state.turnIndex].roleId];
-  if(!Number.isInteger(amount)||amount<=0||amount>c.debt||amount>c.cash)throw Error('還款不能超過現金或未償債務。');
-  c.cash-=amount;c.debt-=amount;state.bank.liquidAssets+=amount;state.bank.totalLoans-=amount;state.log.unshift(`${state.players[state.turnIndex].name}償還 ${amount} 借款。`);
-}
-function updateBadLoans(state,playerId,amount){
-  const p=state.players[state.turnIndex];
-  if(state.status!=='playing'||state.phase!=='manage'||p.id!==playerId||p.roleId!=='bank')throw Error('只有銀行玩家能在自己的回合調整壞帳。');
-  if(!Number.isInteger(amount)||amount===0||state.bank.nonperformingLoans+amount<0||state.bank.nonperformingLoans+amount>state.bank.totalLoans)throw Error('壞帳調整超出範圍。');
-  state.bank.nonperformingLoans+=amount;state.log.unshift(`銀行${amount>0?'認列':'收回'} ${Math.abs(amount)} 壞帳。`);
-}
 
-function marketShock(state,round){
-  const sum=state.activeEvents.filter(a=>a.scope==='global').reduce((total,a)=>{
-    const e=eventById(a.eventId),age=round-a.startedRound;
-    return total+(e&&age>=0&&age<e.duration?e.effects.filter(f=>f.metric==='asset_value').reduce((s,f)=>s+f.pct*e.decay[age],0):0);
-  },0);
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  return clamp(sum+(program==='QE'?5:program==='QT'?-5:0),-60,100);
-}
-function makeSnapshot(state,round=state.round){
-  const prev=state.economicHistory.at(-1)||null,ago3=state.economicHistory.find(x=>x.round===round-3)||null;
-  const f=ROLES.map(r=>financials(state,r.id,round));
-  const sumMetric=m=>f.reduce((s,x)=>s+Math.abs(x.flows[m]),0),sumBase=m=>ROLES.reduce((s,r)=>s+Math.abs(r.base[m]),0);
-  const energyChangePct=pct(sumMetric('energy'),sumBase('energy'));
-  const materialChangePct=pct(sumMetric('material'),sumBase('material'));
-  const inflationPct=2+.08*energyChangePct+.06*materialChangePct;
-  const revenueTotal=f.reduce((s,x)=>s+x.revenue,0),employed=Object.values(state.companies).reduce((s,c)=>s+c.headcount,0),unemployed=1000-employed;
-  const stockIndex=100*(1+marketShock(state,round)/100);
-  const priorStock=prev?.stockIndex??100;
-  const program=state.monetaryProgram&&round>=state.monetaryProgram.startRound&&round<state.monetaryProgram.startRound+2?state.monetaryProgram.type:null;
-  const cooldown=state.lastRateDecisionRound===null?0:Math.max(0,3-(round-state.lastRateDecisionRound));
-  const stock3=ago3?.stockIndex??(round===3?state.initialStockIndex??100:null),loans3=ago3?.totalLoans??(round===3?state.initialTotalLoans??1000:null);
-  return {round,inflationPct,previousInflationPct:prev?.inflationPct??null,energyChangePct,materialChangePct,revenueTotal,previousRevenueTotal:prev?.revenueTotal??null,growthPct:prev?pct(revenueTotal,prev.revenueTotal):null,previousGrowthPct:prev?.growthPct??null,laborForce:1000,employed,unemployed,unemploymentPct:unemployed/10,previousUnemploymentPct:prev?.unemploymentPct??null,stockIndex,previousStockIndex:priorStock,stockIndex3Ago:stock3,stockReturn1Pct:pct(stockIndex,priorStock),stockReturn3Pct:stock3===null?null:pct(stockIndex,stock3),totalLoans:state.bank.totalLoans,totalLoans3Ago:loans3,loanGrowth3Pct:loans3===null?null:pct(state.bank.totalLoans,loans3),liquidAssets:state.bank.liquidAssets,shortTermLiabilities:state.bank.shortTermLiabilities,liquidityPct:div(100*state.bank.liquidAssets,state.bank.shortTermLiabilities),nonperformingLoans:state.bank.nonperformingLoans,nplPct:div(100*state.bank.nonperformingLoans,state.bank.totalLoans),fedRatePct:state.fedRatePercent,rateCooldownRounds:cooldown,monetaryProgram:program,monetaryProgramRoundsLeft:program?state.monetaryProgram.startRound+2-round:0,dataWarnings:[]};
-}
-const cmp=(label,value,op,limit)=>`${label} ${value===null?'—':round2(value).toFixed(2)+'%'} ${op} ${limit}%（${value===null?'資料不足':op==='≥'?value>=limit?'是':'否':op==='≤'?value<=limit?'是':'否':value<limit?'是':'否'}）`;
-function evaluateFed(snapshot,state){
-  const tests={
-    F01:{ok:snapshot.inflationPct>=8,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',8)]},
-    F02:{ok:snapshot.inflationPct>=4&&snapshot.previousInflationPct>=4,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',4),cmp('π(t−1)',snapshot.previousInflationPct,'≥',4)]},
-    F03:{ok:snapshot.inflationPct>=6&&snapshot.growthPct<=-5,comparisons:[cmp('π(t)',snapshot.inflationPct,'≥',6),cmp('g(t)',snapshot.growthPct,'≤',-5)]},
-    F04:{ok:snapshot.growthPct<=-10&&snapshot.previousGrowthPct<=-10,comparisons:[cmp('g(t)',snapshot.growthPct,'≤',-10),cmp('g(t−1)',snapshot.previousGrowthPct,'≤',-10)]},
-    F05:{ok:snapshot.unemploymentPct>=10&&snapshot.previousUnemploymentPct>=10,comparisons:[cmp('u(t)',snapshot.unemploymentPct,'≥',10),cmp('u(t−1)',snapshot.previousUnemploymentPct,'≥',10)]},
-    F06:{ok:snapshot.inflationPct<=-2&&snapshot.previousInflationPct<=-2,comparisons:[cmp('π(t)',snapshot.inflationPct,'≤',-2),cmp('π(t−1)',snapshot.previousInflationPct,'≤',-2)]},
-    F07:{ok:snapshot.stockReturn1Pct<=-25,comparisons:[cmp('股市單季',snapshot.stockReturn1Pct,'≤',-25),cmp('g(t)',snapshot.growthPct,'<',0)]},
-    F08:{ok:snapshot.liquidityPct<10,comparisons:[cmp('流動性',snapshot.liquidityPct,'<',10)]},
-    F09:{ok:snapshot.nplPct>=8,comparisons:[cmp('壞帳率',snapshot.nplPct,'≥',8)]},
-    F10:{ok:snapshot.stockReturn3Pct>=30&&snapshot.loanGrowth3Pct>=20,comparisons:[cmp('股市三季',snapshot.stockReturn3Pct,'≥',30),cmp('放款三季',snapshot.loanGrowth3Pct,'≥',20)]}
-  };
-  const evaluations=FED_RULES.map(rule=>({ruleId:rule.id,name:rule.name,requiredMetricIds:rule.fields,comparisons:tests[rule.id].comparisons,status:rule.fields.some(k=>snapshot[k]===null||snapshot[k]===undefined)?'insufficient_data':tests[rule.id].ok?'matched':'not_matched',reason:'',proposedAction:null,nextEffectiveRound:null}));
-  const selectedId=FED_PRIORITY.find(id=>evaluations.find(x=>x.ruleId===id).status==='matched')||null;
-  for(const ev of evaluations){
-    if(ev.status==='matched'&&ev.ruleId!==selectedId){ev.status='suppressed_by_priority';ev.reason=`優先序低於 ${selectedId}`}
+function tileEffect(state,player,{leverage=false,noReward=false,forcedRed=false}={}){
+  const board=boardOf(state);
+  const tile=board[player.position];
+  const effects=[];
+  const push=(icon,text,tone='neutral')=>effects.push({icon,text,tone});
+  // 派對擴充：電商「購物節狂歡」的無敵狀態可讓本回合所有踩格效果失效。
+  if(player.ext?.immune){
+    push('✨','無敵狀態：本回合所有踩格效果無效化','good');
+    return effects;
   }
-  const chosen=evaluations.find(x=>x.ruleId===selectedId);
-  if(chosen){
-    let action='維持利率與金融措施',kind='none',delta=0;
-    switch(selectedId){
-      case 'F01':kind='rate';delta=.75;action='升息 0.75 個百分點';break;
-      case 'F02':kind='rate';delta=.25;action='升息 0.25 個百分點';break;
-      case 'F03':action='維持利率，觀察金融風險';break;
-      case 'F04':kind='rate';delta=-.5;action='降息 0.50 個百分點';break;
-      case 'F05':kind='rate';delta=-.25;action='降息 0.25 個百分點';break;
-      case 'F06':kind=snapshot.fedRatePct===0?'program':'rate';delta=-.5;action=kind==='program'?'啟動 QE 2 回合':'降息 0.50 個百分點';break;
-      case 'F07':kind=snapshot.growthPct<0?'program':'none';action=kind==='program'?'啟動 QE 2 回合':'市場觀察公告：景氣尚未衰退';break;
-      case 'F08':kind='rescue';action='緊急流動性融資補足至 15%';break;
-      case 'F09':kind='restriction';action='停止高風險新增放款 2 回合';break;
-      case 'F10':kind=snapshot.fedRatePct<6?'rate':'program';delta=.25;action=kind==='rate'?'升息 0.25 個百分點':'啟動 QT 2 回合';break;
+  let type=forcedRed?'red':tile.type;
+  if(forcedRed&&tile.type!=='red')push('🔌','限電危機生效，本次落地強制視為蕭條格','bad');
+  if(!['start','blue','red','yellow','green'].includes(type)){
+    if(engineHooks.resolveTile)engineHooks.resolveTile(state,player,{leverage,noReward,forcedRed},effects);
+    return effects;
+  }
+  const mult=leverage?2:1;
+  if(type==='blue'){
+    const base=tile.value||300,amount=base*mult;
+    if(noReward){
+      push('🚫','銀根緊縮：發財格獎勵被沒收','bad');
+    }else{
+      const anniversary=state.effects.anniversary;
+      if(anniversary&&anniversary.round===state.round&&anniversary.ownerId!==player.id){
+        const owner=state.players.find(p=>p.id===anniversary.ownerId);
+        if(owner){
+          addCash(state,owner,amount);
+          push('🎊',`${owner.name} 的瘋狂週年慶截走 ${amount} 總資產`,'good');
+        }
+      }else{
+        addCash(state,player,amount);
+        push('💰',`發財格：獲得 ${amount} 總資產`,'good');
+      }
     }
-    if(kind==='rate'&&snapshot.rateCooldownRounds>0){chosen.status='rate_cooldown';chosen.reason=`利率冷卻尚餘 ${snapshot.rateCooldownRounds} 回合`;action='冷卻中，維持利率';kind='none'}
-    else {chosen.status='selected';chosen.reason='依優先序採用'}
-    chosen.proposedAction=action;chosen.nextEffectiveRound=snapshot.round+1;
-    return {evaluations,decision:{round:snapshot.round,ruleId:selectedId,action,kind,delta,nextEffectiveRound:snapshot.round+1}};
+  }else if(type==='red'){
+    const tariff=state.effects.tariff;
+    const doubled=!leverage&&tariff&&tariff.rounds>0&&tariff.sourceId!==player.id;
+    const base=tile.type==='red'?(tile.value||150):150;
+    let amount=base*mult*(doubled?2:1);
+    if(engineHooks.tileDamageMultiplier)amount=Math.round(amount*engineHooks.tileDamageMultiplier(state,player,'red',amount));
+    if(engineHooks.tileDamageBlocked&&engineHooks.tileDamageBlocked(state,player,'red')){
+      push('✨','無敵／卍解狀態無效化本次扣款','good');
+    }else{
+      addCash(state,player,-amount);
+      push('📉',`蕭條格：扣除 ${amount} 營運費${doubled?'（關稅壁壘加倍）':leverage?'（槓桿加倍）':''}`,'bad');
+    }
+  }else if(type==='yellow'){
+    if(noReward){
+      push('🚫','銀根緊縮：技能能量被沒收','bad');
+    }else{
+      const amount=(tile.value||1)*mult;
+      player.energy=clamp(player.energy+amount,0,9);
+      push('⚡',`技能格：獲得 ${amount} 點技能能量`,'good');
+    }
+  }else if(type==='green'){
+    const event=eventById(pick(state,PARTY_EVENTS).id);
+    push(event.icon,`${event.name}：${event.text}`,'event');
+    if(engineHooks.tileEvent)engineHooks.tileEvent(state,player,event,effects);
+    if(event.kind==='allCash'){
+      for(const target of state.players)addCash(state,target,event.amount);
+    }else if(event.kind==='selfCash'){
+      addCash(state,player,event.amount);
+    }else if(event.kind==='selfEnergy'){
+      player.energy=clamp(player.energy+event.amount,0,9);
+    }else if(event.kind==='allEnergy'){
+      for(const target of state.players)target.energy=clamp(target.energy+event.amount,0,9);
+    }
+  }else if(type==='start'){
+    push('🚩','出發點：集齊四角記號並經過此處可領取 1,000 元補助金','neutral');
   }
-  return {evaluations,decision:{round:snapshot.round,ruleId:null,action:'維持利率與金融措施',kind:'none',delta:0,nextEffectiveRound:snapshot.round+1}};
+  return effects;
 }
 
-function applyDecision(state,decision){
-  if(!decision)return;
-  if(decision.kind==='rate')state.fedRatePercent=clamp(round2(state.fedRatePercent+decision.delta),0,10);
-  if(decision.kind==='program'){
-    const type=decision.action.includes('QE')?'QE':'QT';
-    state.monetaryProgram={type,startRound:state.round};
+// 供交換位置、矢量操作等「非目前回合玩家」立即結算所在格效果使用。
+// 只處理該格的停留效果，不另外發放通過起點獎金。
+function resolveTileFor(state,player,opts={}){
+  const effects=[];
+  if(!state||!player)return effects;
+  if(state.ghostPosition===player.position){
+    if(engineHooks.ghostStrike)engineHooks.ghostStrike(state,player,effects);
+    else{
+      const amount=150;
+      addCash(state,player,-amount);
+      effects.push({icon:'👻',text:`撞上罷工幽靈，扣除 ${amount} 營運費`,tone:'bad'});
+    }
+    return effects;
   }
-  if(decision.kind==='rescue'){
-    const amount=Math.max(0,.15*state.bank.shortTermLiabilities-state.bank.liquidAssets);
-    state.bank.liquidAssets+=amount;state.bank.shortTermLiabilities+=amount;
-    if(amount)state.bank.rescues.push({amount,dueRound:state.round+3});
-  }
-  if(decision.kind==='restriction')state.bank.riskRestrictionUntil=state.round+1;
-  if(decision.kind!=='none')state.log.unshift(`第 ${state.round} 季生效｜聯準會 ${decision.action}。`);
+  for(const e of tileEffect(state,player,opts))effects.push(e);
+  return effects;
 }
-function endTurn(state){
-  if(state.status!=='playing'||!['manage','strike'].includes(state.phase))throw Error('請先完成本回合。');
-  moveGhost(state);
-  if(state.turnIndex<state.players.length-1){state.turnIndex++;state.phase='roll';state.dice=null;state.reels=null;state.lastDraw=null;return null}
-  const result=settleSeason(state);return result;
+
+function landingForSwap(state,player,other){
+  return resolveTileFor(state,player,{leverage:player===other?false:player.leverage})
+    .map(e=>({...e,text:`${player.name}：${e.text}`}));
 }
-function settleSeason(state){
+
+function rollDie(state,forced,options={}){
   if(state.status!=='playing')throw Error('遊戲已結束。');
-  const round=state.round;
-  const financialResults=Object.fromEntries(ROLES.map(r=>[r.id,financials(state,r.id,round)]));
-  for(const r of ROLES)state.companies[r.id].cash=round2(state.companies[r.id].cash+financialResults[r.id].profit);
-  const snapshot=makeSnapshot(state,round);
-  state.economicHistory.push(snapshot);
-  const {evaluations,decision}=evaluateFed(snapshot,state);
-  state.evaluations.push({round,items:evaluations});state.decisions.push(decision);
-  state.log.unshift(`第 ${round} 季結算完成｜總營收 ${Math.round(snapshot.revenueTotal).toLocaleString()}、通膨 ${round2(snapshot.inflationPct)}%、聯準會：${decision.action}。`);
-  if(decision.kind==='rate')state.lastRateDecisionRound=round;
-  const bankrupt=state.players.filter(p=>state.companies[p.roleId].cash+financialResults[p.roleId].assetValue-state.companies[p.roleId].debt<=0);
-  const achievers=state.players.filter(p=>state.companies[p.roleId].cash+financialResults[p.roleId].assetValue-state.companies[p.roleId].debt>=state.targetWealth);
-  if(bankrupt.length||achievers.length||round>=state.maxRounds){
-    state.status=bankrupt.length?'bankruptcy':achievers.length?'goal':'round_limit';
-    state.winnerIds=(achievers.length?achievers:state.players.filter(p=>!bankrupt.includes(p)).sort((a,b)=>companyPosition(state,b.roleId).netWorth-companyPosition(state,a.roleId).netWorth).slice(0,1)).map(p=>p.id);
-    state.phase='finished';return {snapshot,decision,finished:true};
+  if(state.phase!=='roll')throw Error('現在無法擲骰。');
+  const player=currentPlayer(state);
+  // 魔女因子等擲骰前快照：每次擲骰都重新覆蓋，回溯點才會精準落在本次擲骰前。
+  if(engineHooks.beforeRoll)engineHooks.beforeRoll(state,player);
+  let value;
+  if(player.ext?.oneStepLock||player.forcedSteps==='one'){
+    value=1;
+  }else if(forced!==undefined&&forced!==null){
+    if(!Number.isInteger(forced)||forced<1||forced>6)throw Error('骰子只能是 1–6。');
+    value=forced;
+  }else if(player.forcedSteps==='low'){
+    value=1+Math.floor(nextRandom(state)*3);
+  }else if(player.forcedSteps==='high'){
+    value=4+Math.floor(nextRandom(state)*3);
+  }else{
+    value=1+Math.floor(nextRandom(state)*6);
+  }
+  let noReward=player.noReward;
+  if(player.bankLock){
+    value=1;
+    noReward=true;
+    player.bankLock=false;
+    log(state,`🔒 ${player.name} 受到緊縮銀根影響，本回合只能前進 1 格。`);
+  }
+  const board=boardOf(state);
+  const leverage=Boolean(player.leverage);
+  const from=player.position,fullPath=movementPath(from,value,board.length);
+  const adjusted=engineHooks.adjustMovePath?.(state,player,fullPath,{from,value});
+  const path=Array.isArray(adjusted)?adjusted:(adjusted?.path||fullPath);
+  const moveMeta=adjusted?.meta||null;
+  player.position=path.at(-1)??from;
+  // 先把棋子移到終點；所有格子效果都延後到 resolveLanding()，
+  // 確保 UI 播完移動動畫、棋子真正停下後才結算與彈窗。
+  state.lastRoll={playerId:player.id,value,from,path,tileIndex:player.position,tileType:board[player.position]?.type,struck:false,passedStart:path.includes(0),effects:[],resolved:false,vector:moveMeta?.vector||null};
+  if(options.defer){
+    state.pendingLanding={playerId:player.id,from,value,path,leverage,noReward,forcedRed:Boolean(player.forcedRed)};
+    state.pendingDecision=null;
+    state.phase='moving';
+    return state.lastRoll;
+  }
+  resolveLanding(state);
+  return state.lastRoll;
+}
+
+// 棋子停止後才發動格子效果（發財／蕭條／技能／事件／幽靈／特殊格）。
+function resolveLanding(state,options={}){
+  if(!state||state.status!=='playing')return state?.lastRoll||null;
+  const roll=state.lastRoll;
+  if(!roll||roll.resolved)return roll||null;
+  const player=state.players.find(p=>p.id===roll.playerId);
+  if(!player)return roll;
+  const pending=state.pendingLanding&&state.pendingLanding.playerId===player.id?state.pendingLanding:null;
+  const board=boardOf(state);
+  const leverage=pending?Boolean(pending.leverage):Boolean(player.leverage);
+  const noReward=pending?Boolean(pending.noReward):Boolean(player.noReward);
+  const forcedRed=pending?Boolean(pending.forcedRed):Boolean(player.forcedRed);
+  const effects=Array.isArray(roll.effects)?roll.effects:[];
+  roll.effects=effects;
+  applyCornerProgress(state,player,roll.path,{passedStart:roll.passedStart&&player.position!==0,effects});
+  // 新版規則：只有「踩在幽靈格」才觸發，路過不算。
+  const struck=player.position===state.ghostPosition;
+  roll.struck=struck;
+  roll.tileIndex=player.position;
+  roll.tileType=board[player.position]?.type;
+  if(struck){
+    if(engineHooks.ghostStrike)engineHooks.ghostStrike(state,player,effects);
+    else{
+      const penalty=150*(leverage?2:1);
+      addCash(state,player,-penalty);
+      effects.push({icon:'👻',text:`踩中罷工幽靈，扣除 ${penalty} 營運費`,tone:'bad'});
+    }
+    log(state,`${player.name} 擲出 ${roll.value}，在第 ${player.position} 格踩中罷工幽靈。`);
+  }else{
+    for(const e of tileEffect(state,player,{leverage,noReward,forcedRed}))effects.push(e);
+    log(state,`${player.name} 擲出 ${roll.value}，停在「${board[player.position].label}」格${effects.length?`：${effects.map(e=>e.text.replace(/。$/,'')).join('；')}`:''}。`);
+  }
+  player.forcedSteps=null;
+  if(player.ext)player.ext.oneStepLock=false;
+  player.leverage=false;
+  player.forcedRed=false;
+  player.noReward=false;
+  roll.resolved=true;
+  state.pendingLanding=null;
+  if(engineHooks.afterRoll)engineHooks.afterRoll(state,player,roll,options);
+  if(state.status==='playing'&&state.phase==='roll'){
+    if(!struck){
+      const decision={playerId:player.id,kind:'landing',options:DECISION_OPTIONS.map(x=>({...x,available:x.id!=='invest'||player.cash>=300}))};
+      state.pendingDecision=engineHooks.prepareDecision?engineHooks.prepareDecision(state,decision,player)||decision:decision;
+      state.phase='decision';
+    }else{
+      state.phase='resolve';
+    }
+  }else if(state.status==='playing'&&state.phase==='moving'){
+    state.phase=struck?'resolve':'resolve';
+  }
+  return roll;
+}
+
+function chooseDecision(state,optionId){
+  if(state.status!=='playing'||state.phase!=='decision'||!state.pendingDecision)throw Error('目前沒有待決定事項。');
+  const p=state.players.find(x=>x.id===state.pendingDecision.playerId);
+  const option=(state.pendingDecision.options||[]).find(x=>x.id===optionId)||DECISION_OPTIONS.find(x=>x.id===optionId);
+  if(!option||!p)throw Error('決策選項無效。');
+  if(option.available===false)throw Error('這個選項目前不可用。');
+  const cash=Number(option.cash)||0,energy=Number(option.energy)||0,shields=Number(option.shields)||0;
+  if(cash<0&&p.cash< -cash&&!option.allowDebt)throw Error(`總資產不足 ${Math.abs(cash)}，無法執行這個選項。`);
+  if(cash)addCash(state,p,cash);
+  // 允許負債的決策可能直接觸發破產／終局，不能再把已結束的階段覆寫回 resolve。
+  if(state.status!=='playing'||p.ext?.eliminated){state.pendingDecision=null;return option;}
+  if(energy)p.energy=clamp(p.energy+energy,0,9);
+  if(shields)p.shields+=shields;
+  if(option.certificate&&engineHooks.grantCertificate)engineHooks.grantCertificate(state,p,option.certificate);
+  log(state,`${option.icon||'🤔'} ${p.name} 做出決策「${option.label||option.name||optionId}」${cash?`：${cash>0?'獲得':'支付'} ${Math.abs(cash)} 總資產`:''}${energy?`、${energy>0?'獲得':'失去'} ${Math.abs(energy)} 能量`:''}。`);
+  state.pendingDecision=null;
+  state.phase='resolve';
+  return option;
+}
+
+function useItem(state,itemId,targetId){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase!=='roll')throw Error('道具只能在擲骰前使用。');
+  const p=currentPlayer(state),index=p.items.indexOf(itemId);
+  if(engineHooks.canUse&&!engineHooks.canUse(state,p,'item',itemId))throw Error(engineHooks.blockedReason?.(state,p,'item',itemId)||'目前無法使用道具。');
+  if(index===-1)throw Error('你沒有這個道具。');
+  const item=itemById(itemId),target=state.players.find(x=>x.id===targetId);
+  if(!item)throw Error('道具不存在。');
+  const opponents=state.players.filter(x=>x.id!==p.id);
+  if(itemId==='swap'){
+    if(!target||target.id===p.id)throw Error('請選擇一位對手交換位置。');
+    const from=p.position,to=target.position;
+    p.position=to;target.position=from;
+    applyCornerProgress(state,p,[to]);
+    applyCornerProgress(state,target,[from]);
+    log(state,`🔄 ${p.name} 與 ${target.name} 交換位置。`);
+    const effects=[...landingForSwap(state,p,target),...landingForSwap(state,target,p)];
+    p.items.splice(index,1);
+    state.lastRoll={playerId:p.id,value:0,from,path:[to],tileIndex:to,tileType:boardOf(state)[to].type,struck:false,effects,swap:{targetId:target.id,from,to}};
+    if(state.phase==='roll')state.phase='roll';
+    return {item,effects};
+  }
+  if(itemId==='shield'){
+    p.shields+=1;
+    log(state,`🛡️ ${p.name} 使用買保險，獲得 1 層護盾（共 ${p.shields} 層）。`);
+  }else if(itemId==='dice123'){
+    p.forcedSteps='low';
+    log(state,`🎲 ${p.name} 使用 123 骰子，本回合點數必定為 1–3。`);
+  }else if(itemId==='dice456'){
+    p.forcedSteps='high';
+    log(state,`🎲 ${p.name} 使用 456 骰子，本回合點數必定為 4–6。`);
+  }else if(itemId==='leverage'){
+    p.leverage=true;
+    log(state,`📈 ${p.name} 使用開槓桿，本回合踩格效果 ×2。`);
+  }
+  p.items.splice(index,1);
+  return {item,effects:[]};
+}
+
+function skillBlocked(state,p){
+  const lock=state.effects.lockdown;
+  return lock&&lock.round===state.round&&roleById(p.roleId)?.sector===lock.sector;
+}
+
+function useSkill(state,targetId,sector){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase!=='roll')throw Error('企業技能只能在擲骰前使用。');
+  const p=currentPlayer(state),target=state.players.find(x=>x.id===targetId);
+  if(engineHooks.canUse&&!engineHooks.canUse(state,p,'skill'))throw Error(engineHooks.blockedReason?.(state,p,'skill')||'目前無法使用技能。');
+  if(skillBlocked(state,p))throw Error('限電危機生效中，本回合無法使用技能。');
+  if(p.energy<1)throw Error('技能能量不足，請先踩技能格或使用道具補充。');
+  const role=roleById(p.roleId);
+  if(!role)throw Error('企業角色無效。');
+  const others=state.players.filter(x=>x.id!==p.id);
+  const needTarget=role.skill.target==='opponent';
+  if(needTarget&&(!target||target.id===p.id))throw Error('請選擇一位對手作為技能目標。');
+  if(role.skill.target==='sector'&&!SECTORS.includes(sector))throw Error('請選擇一個產業。');
+  const result=[];
+  switch(p.roleId){
+    case 'investment':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const amount=Math.min(500,Math.max(0,Math.floor(target.cash*.25)));
+      if(!amount)throw Error('目標總資產不足，無法做空。');
+      addCash(state,target,-amount);addCash(state,p,amount);
+      result.push(`從 ${target.name} 竊取 ${amount} 總資產`);
+      break;
+    }
+    case 'bank':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.bankLock=true;target.noReward=true;
+      result.push(`${target.name} 下回合只能前進 1 格且沒有踩格獎勵`);
+      break;
+    }
+    case 'electronics':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.skipTurns=(target.skipTurns||0)+1;
+      addCash(state,target,-200);addCash(state,p,200);
+      result.push(`${target.name} 下回合暫停行動，並轉移 200 總資產`);
+      break;
+    }
+    case 'auto':{
+      state.effects.tariff={rounds:2,sourceId:p.id};
+      result.push('未來 2 回合其他玩家踩紅格扣款翻倍');
+      break;
+    }
+    case 'retail':{
+      state.effects.anniversary={round:state.round,ownerId:p.id};
+      result.push('本回合其他玩家的藍格總資產全部歸你');
+      break;
+    }
+    case 'agriculture':{
+      let collected=0;
+      for(const other of others){
+        if(consumeShield(state,other,role.skill.name))continue;
+        addCash(state,other,-150);
+        collected+=150;
+      }
+      const half=Math.floor(collected/2);
+      addCash(state,p,half);
+      result.push(`所有對手損失 150，你收到 ${half} 總資產`);
+      break;
+    }
+    case 'energy':{
+      state.effects.lockdown={round:state.round,sector};
+      let count=0;
+      for(const other of state.players){
+        if(roleById(other.roleId)?.sector===sector){other.forcedRed=true;count++}
+      }
+      result.push(`${sector} 共 ${count} 位玩家本回合禁用技能，下次踩格強制紅格`);
+      break;
+    }
+    case 'logistics':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const offset=1+Math.floor(nextRandom(state)*3);
+      const from=target.position;
+      state.ghostTrail=[from,...Array.from({length:offset},(_,i)=>(from+i+1)%BOARD.length)];
+      state.ghostPosition=(from+offset)%BOARD.length;
+      result.push(`罷工幽靈被移到 ${target.name} 前方 ${offset} 格`);
+      break;
+    }
+    case 'property':{
+      if(consumeShield(state,target,role.skill.name))break;
+      target.rentTo=p.id;target.rentTurns=(target.rentTurns||0)+2;
+      result.push(`${target.name} 接下來 2 個回合每回合付你 100 租金`);
+      break;
+    }
+    case 'technology':{
+      if(consumeShield(state,target,role.skill.name))break;
+      const canSteal=target.cash>0;
+      if(target.energy>0&&(!canSteal||nextRandom(state)<.5)){
+        target.energy--;
+        result.push(`刪除 ${target.name} 1 點技能能量`);
+      }else if(canSteal){
+        const amount=Math.min(300,Math.max(0,target.cash));
+        addCash(state,target,-amount);addCash(state,p,amount);
+        result.push(`偷取 ${target.name} ${amount} 總資產`);
+      }else{
+        target.energy=Math.max(0,target.energy-1);
+        result.push(`刪除 ${target.name} 1 點技能能量`);
+      }
+      break;
+    }
+    default:throw Error('此企業沒有可用技能。');
+  }
+  p.energy-=1;
+  log(state,`${role.skill.icon} ${p.name} 發動「${role.skill.name}」：${result.join('；')}。`);
+  return {skill:role.skill,result};
+}
+
+function buyStar(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法購買星星。');
+  const p=currentPlayer(state);
+  if(p.stars>=STAR_GOAL)throw Error('已經達成勝利星數。');
+  if(p.cash<STAR_COST)throw Error(`購買併購星需要 ${STAR_COST} 總資產。`);
+  addCash(state,p,-STAR_COST);
+  p.stars+=1;
+  log(state,`⭐ ${p.name} 以 ${STAR_COST} 總資產買下第 ${p.stars} 顆併購星。`);
+  checkStarWin(state);
+  return p.stars;
+}
+
+function acquisitionCost(state,acquirer,target){
+  if(acquirer.cash<0&&target.cash<0)return 0;
+  if(acquirer.cash<ACQUIRE_COST)throw Error(`發動併購需要 ${ACQUIRE_COST} 總資產，或雙方總資產皆為負值。`);
+  return target.cash<0?ACQUIRE_DISCOUNT_COST:ACQUIRE_COST;
+}
+
+function acquireTarget(state,targetId){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法發動併購。');
+  const p=currentPlayer(state),target=state.players.find(x=>x.id===targetId);
+  if(!target||target.id===p.id)throw Error('請選擇一位對手。');
+  if(target.parentId)throw Error('該玩家已是其他公司的子公司。');
+  if(state.players.some(x=>x.parentId===p.id))throw Error('你已有一家子公司，無法再併購。');
+  if(target.stars>=STAR_GOAL)throw Error('已達勝利星數的玩家無法被併購。');
+  const cost=acquisitionCost(state,p,target);
+  if(cost>0&&p.cash<cost)throw Error(`併購需要 ${cost} 總資產。`);
+  addCash(state,p,-cost);
+  if(cost)addCash(state,target,Math.floor(cost*.25));
+  target.parentId=p.id;
+  log(state,`🤝 ${p.name} 以 ${cost} 總資產併購 ${target.name}，${target.name} 成為子公司（每回合上繳 40% 收益）。`);
+  return {cost,target};
+}
+
+function rebel(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(!['roll','resolve'].includes(state.phase))throw Error('現在無法發動獨立反撲。');
+  const p=currentPlayer(state);
+  if(!p.parentId)throw Error('你不是任何公司的子公司。');
+  if(p.cash<REBEL_COST)throw Error(`獨立反撲需要 ${REBEL_COST} 總資產。`);
+  const parent=state.players.find(x=>x.id===p.parentId);
+  addCash(state,p,-REBEL_COST);
+  p.parentId=null;
+  log(state,`🕊️ ${p.name} 支付 ${REBEL_COST} 總資產，成功脫離 ${parent?.name||'母公司'} 獨立。`);
+  return true;
+}
+
+function endTurn(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  if(state.phase==='decision'||state.phase==='roll')throw Error('請先完成擲骰與決策。');
+  if(!['resolve','skipped'].includes(state.phase))throw Error('現在無法結束回合。');
+  const p=currentPlayer(state);
+  if(engineHooks.beforeEndTurn)engineHooks.beforeEndTurn(state,p);
+  const gain=Math.max(0,state.turnGains[p.id]||0);
+  if(p.parentId&&gain>0){
+    const parent=state.players.find(x=>x.id===p.parentId);
+    if(parent){
+      const transfer=Math.round(gain*.4);
+      addCash(state,p,-transfer);addCash(state,parent,transfer);
+      log(state,`🏢 ${p.name} 上繳 40% 收益 ${transfer} 總資產給母公司 ${parent.name}。`);
+    }
+  }
+  moveGhost(state);
+  if(state.turnIndex>=state.players.length-1){
+    const result=settleRound(state);
+    return result;
+  }
+  state.turnIndex++;
+  state.dice=null;
+  startTurn(state);
+  return null;
+}
+
+function settleRound(state){
+  if(state.status!=='playing')throw Error('遊戲已結束。');
+  const finishedRound=state.round;
+  if(state.effects.tariff){
+    state.effects.tariff.rounds-=1;
+    if(state.effects.tariff.rounds<=0){
+      log(state,`🧱 ${state.players.find(p=>p.id===state.effects.tariff.sourceId)?.name||''} 的關稅壁壘結束。`);
+      delete state.effects.tariff;
+    }
+  }
+  delete state.effects.anniversary;
+  delete state.effects.lockdown;
+  state.ghostTrail=[];
+  if(engineHooks.afterRound)engineHooks.afterRound(state,finishedRound,{final:state.round>=state.maxRounds});
+  if(state.status!=='playing')return {round:finishedRound,finished:true,reason:state.resultReason||'ext',winners:state.players.filter(p=>state.winnerIds.includes(p.id)).map(p=>p.name)};
+  if(state.round>=state.maxRounds){
+    const ranked=[...state.players].sort((a,b)=>b.stars-a.stars||b.cash-a.cash);
+    const top=ranked[0];
+    const winners=ranked.filter(p=>p.stars===top.stars&&p.cash===top.cash);
+    const override=engineHooks.beforeFinal?.(state,winners,ranked);
+    if(override&&override.continue){
+      state.round++;
+      state.turnIndex=0;
+      log(state,`⚡ 驟死賽開始｜第 ${state.round} 季，憤怒幽靈全面出動。`);
+      startTurn(state);
+      return {round:finishedRound,finished:false,suddenDeath:true};
+    }
+    finish(state,'rounds',winners);
+    return {round:finishedRound,finished:true,reason:'rounds',winners:winners.map(p=>p.name)};
   }
   state.round++;
-  state.struckPlayerIds=[];
-  state.activeEvents=state.activeEvents.filter(a=>eventRemaining(a,state.round)>0);
-  state.monetaryProgram=state.monetaryProgram&&state.round<state.monetaryProgram.startRound+2?state.monetaryProgram:null;
-  for(const rescue of [...state.bank.rescues])if(rescue.dueRound<=state.round&&state.bank.liquidAssets>=rescue.amount){state.bank.liquidAssets-=rescue.amount;state.bank.shortTermLiabilities-=rescue.amount;state.bank.rescues.splice(state.bank.rescues.indexOf(rescue),1);state.log.unshift(`第 ${state.round} 季｜銀行償還緊急融資 ${rescue.amount}。`)}
-  applyDecision(state,decision);
-  state.turnIndex=0;state.phase='roll';state.dice=null;state.reels=null;state.lastDraw=null;
-  return {snapshot,decision,finished:false};
+  state.turnIndex=0;
+  log(state,`第 ${state.round} 季開始｜市場重新洗牌，罷工幽靈繼續遊蕩。`);
+  startTurn(state);
+  return {round:finishedRound,finished:false};
 }
-function getEconomicSnapshot(state,round){return state.economicHistory.find(x=>x.round===round)||null}
-function getEconomicHistory(state,from=1,to=state.round){return state.economicHistory.filter(x=>x.round>=from&&x.round<=to)}
-function getFedRuleEvaluations(state,round){return state.evaluations.find(x=>x.round===round)?.items||null}
-function getFedDecision(state,round){return state.decisions.find(x=>x.round===round)||null}
+
+function statusChips(state,player){
+  const chips=[];
+  if(player.shields>0)chips.push({icon:'🛡️',label:`護盾 ×${player.shields}`,tone:'shield'});
+  if(player.leverage)chips.push({icon:'📈',label:'槓桿 ×2',tone:'leverage'});
+  if(player.forcedSteps==='low')chips.push({icon:'🎲',label:'123 骰',tone:'dice'});
+  if(player.forcedSteps==='high')chips.push({icon:'🎲',label:'456 骰',tone:'dice'});
+  if(player.bankLock)chips.push({icon:'🔒',label:'銀根緊縮',tone:'bad'});
+  if(player.skipTurns>0)chips.push({icon:'⏸️',label:'下回合暫停',tone:'bad'});
+  if(player.forcedRed)chips.push({icon:'📉',label:'下次強制紅格',tone:'bad'});
+  if(player.rentTo&&player.rentTurns>0)chips.push({icon:'🏗️',label:`租金 ×${player.rentTurns}`,tone:'bad'});
+  if(player.parentId)chips.push({icon:'🏢',label:`子公司 · ${state.players.find(p=>p.id===player.parentId)?.name||'母公司'}`,tone:'subsidiary'});
+  if(player.stars>=STAR_GOAL)chips.push({icon:'⭐',label:'已達勝星',tone:'star'});
+  const lock=state.effects.lockdown;
+  if(lock&&lock.round===state.round&&roleById(player.roleId)?.sector===lock.sector)chips.push({icon:'🔌',label:'限電禁技',tone:'bad'});
+  if(engineHooks.extraStatusChips)chips.push(...(engineHooks.extraStatusChips(state,player)||[]));
+  return chips;
+}
+
+function canAcquire(state,player,target){
+  if(!player||!target||player.id===target.id)return false;
+  if(target.parentId||state.players.some(x=>x.parentId===player.id))return false;
+  if(target.stars>=STAR_GOAL)return false;
+  if(player.cash<0&&target.cash<0)return true;
+  return player.cash>=ACQUIRE_COST;
+}
+
+function canRebel(player){return Boolean(player&&player.parentId&&player.cash>=REBEL_COST)}
+
 function exportGame(state){return JSON.stringify(state,null,2)}
-function importGame(json){const s=JSON.parse(json);if(s.version!==1||!Array.isArray(s.players)||!Array.isArray(s.economicHistory)||!s.companies||!s.bank||!Array.isArray(s.activeEvents))throw Error('存檔格式不正確。');ensureGhostState(s);return s}
+
+function migrateLegacy(s){
+  const players=s.players.map((p,i)=>({
+    id:p.id||`player-${i+1}`,name:p.name,roleId:p.roleId,position:Number.isInteger(p.position)?p.position:0,color:Number.isInteger(p.color)?p.color:i,
+    cash:Number.isFinite(s.companies?.[p.roleId]?.cash)?s.companies[p.roleId].cash:START_CASH,stars:0,energy:1,items:[],shields:0,skipTurns:0,rentTo:null,rentTurns:0,parentId:null,leverage:false,bankLock:false,noReward:false,forcedRed:false,forcedSteps:null
+  }));
+  const legacyFinished=s.status&&s.status!=='playing';
+  const state={version:2,mode:'party',round:legacyFinished?s.maxRounds||1:s.round||1,maxRounds:s.maxRounds||10,starGoal:STAR_GOAL,turnIndex:legacyFinished?0:clamp(Number(s.turnIndex)||0,0,players.length-1),phase:legacyFinished?'finished':'roll',rng:Number.isInteger(s.rng)&&s.rng!==0?s.rng:(Number(s.seed)|0)||1,seed:Number(s.seed)||Date.now(),players,ghostRng:s.ghostRng||ghostSeed(s.seed||Date.now()),ghostPosition:s.ghostPosition,ghostTrail:[],effects:{},turnGains:{},lastRoll:null,pendingDecision:null,log:Array.isArray(s.log)?s.log.slice(0,160):[],status:legacyFinished?'finished':'playing',resultReason:legacyFinished?'legacy':null,winnerIds:legacyFinished&&Array.isArray(s.winnerIds)?s.winnerIds:[],sync:s.sync||null};
+  ensurePartyState(state);
+  state.log.unshift('📥 已將第 1 版財務存檔轉換為派對棋盤，總資產與企業角色完整保留。');
+  return state;
+}
+
+function importGame(json){
+  const s=typeof json==='string'?JSON.parse(json):json;
+  if(!s||typeof s!=='object')throw Error('存檔格式不正確。');
+  if(s.version!==1&&s.version!==2)throw Error('存檔版本不支援。');
+  if(s.version===1)return migrateLegacy(s);
+  if(!Array.isArray(s.players)||s.players.length<2||s.players.length>8)throw Error('存檔玩家數量必須為 2 至 8 人。');
+  const validRole=id=>engineHooks.roleExists?engineHooks.roleExists(id):Boolean(roleById(id));
+  for(const p of s.players)if(!p||!validRole(p.roleId)||!String(p.name||'').trim())throw Error('存檔中的玩家或企業資料不正確。');
+  if(!Array.isArray(s.log))s.log=[];
+  return ensurePartyState(s);
+}
 
 
-const auctionCatalog=[
- {id:'traffic',icon:'🚦',title:'市政府更新智慧交通設備',story:'市政府徵求車輛、設備與系統供應商，公開招標年度合作案。',roles:['auto','electronics','logistics','technology'],kind:'income',amount:150,duration:2},
- {id:'partners',icon:'🤝',title:'大型企業招募年度合作夥伴',story:'一家跨國企業正在尋找長期合作夥伴，邀請各產業提出合作方案。',roles:null,kind:'income',amount:100,duration:2},
- {id:'schools',icon:'🏫',title:'學校更新電腦教室',story:'學校準備更新電腦、網路與教學系統，徵求設備及技術團隊。',roles:['electronics','technology'],kind:'income',amount:120,duration:2},
- {id:'festival',icon:'🎪',title:'城市嘉年華徵求服務商',story:'主辦單位公開徵求商品、餐飲、交通及活動支援服務。',roles:['retail','agriculture','logistics','technology'],kind:'income',amount:220,duration:1},
- {id:'delivery',icon:'📦',title:'電商平台擴大配送合作',story:'電商平台尋找配送與數位調度團隊，承接新一季的訂單。',roles:['logistics','technology'],kind:'income',amount:150,duration:2},
- {id:'energy',icon:'☀️',title:'工業園區招標節能改造',story:'園區要降低用電成本，徵求能源、設備與智慧管理方案。',roles:['energy','electronics','technology'],kind:'income',amount:130,duration:2},
- {id:'food',icon:'🥗',title:'連鎖餐廳徵求年度供應商',story:'餐飲集團公開招標食品供應與冷鏈配送服務。',roles:['agriculture','logistics','retail'],kind:'income',amount:120,duration:2},
- {id:'payroll',icon:'💳',title:'企業集團招標員工福利平台',story:'企業集團整合薪轉、理財與數位服務，徵求合作團隊。',roles:['bank','investment','technology'],kind:'income',amount:120,duration:2},
- {id:'housing',icon:'🏘️',title:'社區招標公共空間更新',story:'社區要更新公共空間與智慧設施，邀請企業提出改造方案。',roles:['property','electronics','technology'],kind:'income',amount:250,duration:1},
- {id:'bulk',icon:'🛒',title:'供應商釋出團購優惠合約',story:'供應商提供一份限量年度採購折扣，各家公司都能競標取得。',roles:null,kind:'saving',amount:100,duration:2},
- {id:'expo',icon:'🎤',title:'國際展覽徵求企業合作',story:'國際展覽開放一個企業合作名額，得標者可獲得新客戶訂單。',roles:null,kind:'income',amount:180,duration:2},
- {id:'upgrade',icon:'🧰',title:'顧問團隊釋出效率提升方案',story:'顧問團隊只有一組服務名額，協助企業減少日常營運支出。',roles:null,kind:'saving',amount:80,duration:3},
- {id:'export',icon:'🌏',title:'海外通路招募台灣供應商',story:'海外買家來台尋找商品與物流夥伴，提供短期合作訂單。',roles:['auto','electronics','agriculture','logistics','retail'],kind:'income',amount:140,duration:2},
- {id:'launch',icon:'🚀',title:'新創園區尋找開幕合作企業',story:'新創園區公開徵求開幕活動與營運支援合作夥伴。',roles:null,kind:'income',amount:200,duration:1}
-];
-function auctionState(game){return game.auctionModule ||= {version:1,serial:0,active:null,effects:[],lastResult:null};}
-function auctionEligible(game,item){return game.players.filter(p=>!item.roles||item.roles.includes(p.roleId)).map(p=>p.id);}
-function auctionOpen(game){
- if(game.status!=='playing')throw Error('對局已結束。');const mod=auctionState(game);if(mod.active)throw Error('這場競標還沒結束。');
- let item,eligibleIds;
- for(let n=0;n<auctionCatalog.length;n++){const candidate=auctionCatalog[(mod.serial+n)%auctionCatalog.length],eligible=auctionEligible(game,candidate);if(eligible.length>=2){item=candidate;eligibleIds=eligible;mod.serial+=n+1;break;}}
- if(!item)throw Error('至少兩位符合資格的玩家才能競標。');
- const id=`${game.sync?.gameId||game.seed}:${mod.serial}:${game.round}`;
- mod.active={id,item:{...item},eligibleIds,submittedIds:[],round:game.round};mod.lastResult=null;
- game.log.unshift(`【商機】${item.title}，${eligibleIds.length} 位玩家可競標。`);return mod.active;
+// ============================================================================
+// 派對擴充引擎（非破壞性掛鉤）
+// 原始 engine.js 的經典規則保持不變；這裡透過 engineHooks 擴充新模式。
+// ============================================================================
+
+const EXT_VERSION = 4;
+const clone = value => JSON.parse(JSON.stringify(value));
+const extMoney = n => Math.round(Number(n) || 0).toLocaleString('zh-TW');
+const extMode = state => GAME_MODES[state?.ext?.mode] || GAME_MODES.star;
+const extNormalizeMode = mode => (!mode || mode === 'classic' || !GAME_MODES[mode]) ? 'star' : mode;
+function extNoteItem(player, name) {
+  if (!player?.ext) return;
+  if (!player.ext.itemGets || typeof player.ext.itemGets !== 'object') player.ext.itemGets = {};
+  const key = String(name || '未知道具');
+  player.ext.itemGets[key] = (player.ext.itemGets[key] || 0) + 1;
 }
-function auctionSubmit(game,secret,playerId,amount,id){
- const a=auctionState(game).active;if(!a||a.id!==id)throw Error('這場競標已結束，請使用最新畫面。');
- if(!a.eligibleIds.includes(playerId))throw Error('你的企業不適用本次商機。');
- if(a.submittedIds.includes(playerId))throw Error('你已出價，不能重複或更改。');
- if(!Number.isSafeInteger(amount)||amount<0)throw Error('請輸入非負整數，0 表示放棄。');
- const p=game.players.find(p=>p.id===playerId);if(!p||amount>0&&amount>game.companies[p.roleId].cash)throw Error('出價超過目前現金。');
- secret[playerId]=amount;a.submittedIds.push(playerId);
- return a.submittedIds.length===a.eligibleIds.length;
+function extSyncStarBlade(state, player, reason = '星星被偷走') {
+  if (!player) return;
+  extPlayerExt(player);
+  if (player.stars > 0) extStarBladeEvolve(state, player);
+  else extStarBladeRevert(state, player, reason);
 }
-function auctionResolve(game,secret){
- const mod=auctionState(game),a=mod.active;if(!a||a.submittedIds.length!==a.eligibleIds.length)throw Error('仍有人尚未回應。');
- const bids=a.eligibleIds.map(id=>({playerId:id,amount:secret[id]}));if(bids.some(b=>!Number.isSafeInteger(b.amount)))throw Error('出價資料遺失，請重新競標。');
- const max=Math.max(...bids.map(b=>b.amount));const tied=bids.filter(b=>b.amount===max);let winner=null;
- if(max>0){let x=game.rng|0;x^=x<<13;x^=x>>>17;x^=x<<5;game.rng=x|0;winner=tied[Math.floor(((x>>>0)/4294967296)*tied.length)];
- const p=game.players.find(p=>p.id===winner.playerId);if(game.companies[p.roleId].cash<max)throw Error('得標者現金不足。');
- game.companies[p.roleId].cash-=max;
- mod.effects.push({id:a.id,ownerId:winner.playerId,item:a.item,startRound:game.round,endRound:game.round+a.item.duration-1});}
- mod.lastResult={id:a.id,item:a.item,bids,winnerId:winner?.playerId||null,price:max,tie:tied.length>1&&max>0};mod.active=null;
- game.log.unshift(winner?`【得標】${game.players.find(p=>p.id===winner.playerId).name} 以 ${max} 取得「${a.item.title}」${tied.length>1?'（同價抽籤）':''}`:`【流標】「${a.item.title}」無人出價。`);
- return mod.lastResult;
+
+function extRole(id) {
+  return PARTY_ROLES.find(r => r.id === id) || ROLES.find(r => r.id === id) || PARTY_ROLES[0];
 }
-function auctionBonus(game,roleId,round,base){
- const p=game.players.find(p=>p.roleId===roleId);if(!p)return 0;
- const active=auctionState(game).effects.filter(e=>e.ownerId===p.id&&e.startRound<=round&&round<=e.endRound);
- const income=active.filter(e=>e.item.kind==='income').reduce((n,e)=>n+e.item.amount,0);
- const savings=Math.min(-base.costs,active.filter(e=>e.item.kind==='saving').reduce((n,e)=>n+e.item.amount,0));
- return income+savings;
+function extRoleOf(player) { return extRole(player?.roleId); }
+function extMythicEntry(player, id) {
+  return (player?.mythics || []).find(x => x.id === id) || null;
 }
+function extHasMythic(player, id) { return Boolean(extMythicEntry(player, id)); }
+function extHasSpecial(player, id) { return (player?.specials || []).includes(id); }
+function extSpecialEntry(player, id) { return extHasSpecial(player, id) ? SPECIAL_ITEM_BY_ID[id] : null; }
+function extItemCount(player) {
+  return (player?.items?.length || 0) + (player?.mythics?.length || 0) + (player?.specials?.length || 0);
+}
+function extHasItemSpace(player, count = 1) {
+  return extItemCount(player) + count <= 3;
+}
+function extStarBladeEvolve(state, player) {
+  const entry = extMythicEntry(player, 'starBlade');
+  if (!entry) return false;
+  entry.id = 'bankai';
+  entry.charges = 1;
+  player.ext.bankai = true;
+  state.ext.lastEvent = { type: 'bankai', playerId: player.id, at: Date.now() };
+  log(state, `🗡️→🌀 ${player.name} 的斬魄刀吸收星之力，進化為「卍解」！收益 +100、免疫負面，但無法再獲取新道具。`);
+  return true;
+}
+function extStarBladeRevert(state, player, reason = '星星被偷走') {
+  const entry = extMythicEntry(player, 'bankai');
+  const wasBankai = Boolean(player.ext?.bankai);
+  if (entry) {
+    entry.id = 'starBlade';
+    entry.charges = 1;
+  }
+  if (player.ext) player.ext.bankai = false;
+  if (entry || wasBankai) {
+    log(state, `🌀→🗡️ ${player.name} 的${reason}，卍解退化回斬魄刀。`);
+    return true;
+  }
+  return false;
+}
+
+function extPlayerExt(p) {
+  if (!p.ext || typeof p.ext !== 'object') {
+    p.ext = {
+      eliminated: false, ghostRole: false, frozen: 0, iceLock: 0, burn: 0, immune: false,
+      bankFreeze: false, bankai: false, itemsAcquired: 0, aliveSeasons: 0,
+      forceOneNext: false, noDiceItems: false, oneStepLock: false, domainUsedRound: 0, starsBought: 0,
+      itemGets: {}, itemRound: null
+    };
+  }
+  p.ext.eliminated = Boolean(p.ext.eliminated);
+  p.ext.ghostRole = Boolean(p.ext.ghostRole);
+  p.ext.frozen = Number.isInteger(p.ext.frozen) ? p.ext.frozen : 0;
+  p.ext.iceLock = Number.isInteger(p.ext.iceLock) ? p.ext.iceLock : 0;
+  p.ext.burn = Number.isInteger(p.ext.burn) ? p.ext.burn : 0;
+  p.ext.immune = Boolean(p.ext.immune);
+  p.ext.bankFreeze = Boolean(p.ext.bankFreeze);
+  p.ext.bankai = Boolean(p.ext.bankai);
+  p.ext.itemsAcquired = Number(p.ext.itemsAcquired) || 0;
+  p.ext.aliveSeasons = Number(p.ext.aliveSeasons) || 0;
+  p.ext.forceOneNext = Boolean(p.ext.forceOneNext);
+  p.ext.noDiceItems = Boolean(p.ext.noDiceItems);
+  p.ext.oneStepLock = Boolean(p.ext.oneStepLock);
+  p.ext.domainUsedRound = Number(p.ext.domainUsedRound) || 0;
+  p.ext.starsBought = Number(p.ext.starsBought) || 0;
+  if (!p.ext.itemGets || typeof p.ext.itemGets !== 'object') p.ext.itemGets = {};
+  if (!Array.isArray(p.mythics)) p.mythics = [];
+  if (!Array.isArray(p.items)) p.items = [];
+  if (!Array.isArray(p.specials)) p.specials = [];
+  // Keep the first copy and never merge charges from duplicate or replayed acquisition packets.
+  const seenMythics = new Set();
+  p.mythics = p.mythics.filter(entry => {
+    if (!entry || !MYTHIC_BY_ID[entry.id]) return false;
+    const meta = MYTHIC_BY_ID[entry.id];
+    if (meta.charges && seenMythics.has(entry.id)) return false;
+    if (meta.charges) seenMythics.add(entry.id);
+    const maximum = Number.isInteger(meta.charges) && meta.charges > 0 ? meta.charges : 1;
+    entry.charges = Number.isInteger(entry.charges)
+      ? Math.max(0, Math.min(maximum, entry.charges))
+      : (meta.charges ? 0 : 1);
+    return entry.charges > 0;
+  });
+  p.items = p.items.filter(id => Boolean(itemById(id)));
+  p.specials = p.specials.filter(id => Boolean(SPECIAL_ITEM_BY_ID[id]));
+  // 普通、神話與特殊道具共用 3 格；舊存檔若超過上限，優先保留特殊與神話道具。
+  if (p.specials.length > 3) p.specials.length = 3;
+  const mythicRoom = Math.max(0, 3 - p.specials.length);
+  if (p.mythics.length > mythicRoom) p.mythics.length = mythicRoom;
+  const itemRoom = Math.max(0, mythicRoom - p.mythics.length);
+  if (p.items.length > itemRoom) p.items.length = itemRoom;
+  // 舊存檔相容：舊版以 ext.bankai 標記進化，將斬魄刀就地替換為卍解。
+  if (extMythicEntry(p, 'bankai')) {
+    p.ext.bankai = true;
+  } else if (p.ext.bankai) {
+    const blade = extMythicEntry(p, 'starBlade');
+    if (blade) blade.id = 'bankai';
+    p.ext.bankai = Boolean(blade);
+  }
+  return p.ext;
+}
+
+function extResolveRoles(players, seed = Date.now()) {
+  const available = PARTY_ROLES.map(r => r.id);
+  let x = (Number(seed) | 0) || 1;
+  const rand = () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 4294967296; };
+  const used = new Set(players.filter(p => p.roleId !== RANDOM_ROLE_ID).map(p => p.roleId));
+  return players.map(p => {
+    if (p.roleId !== RANDOM_ROLE_ID) {
+      used.add(p.roleId);
+      return { ...p };
+    }
+    const pool = available.filter(id => !used.has(id));
+    const id = pool.length ? pool[Math.floor(rand() * pool.length)] : available[Math.floor(rand() * available.length)];
+    used.add(id);
+    return { ...p, roleId: id, wasRandomRole: true };
+  });
+}
+
+function extShuffle(state, list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(nextRandom(state) * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function extBuildBoard(state, mode) {
+  const total = 24;
+  const activeMode = mode || state?.ext?.mode || 'star';
+  const blueValue = activeMode === 'tycoon' ? TYCOON_BLUE_REWARD : 300;
+  const specialSlots = new Array(total).fill(null);
+  const allSpecials = [];
+  for (const [type, count] of Object.entries(SPECIAL_COUNTS)) {
+    for (let i = 0; i < count; i++) allSpecials.push(type);
+  }
+  const shuffled = extShuffle(state, allSpecials);
+  const used = new Set();
+  const isAdjacent = i => used.has((i - 1 + total) % total) || used.has((i + 1) % total);
+  for (const type of shuffled) {
+    let placed = false;
+    for (const i of extShuffle(state, Array.from({ length: total - 1 }, (_, k) => k + 1))) {
+      if (used.has(i) || isAdjacent(i)) continue;
+      used.add(i); specialSlots[i] = type; placed = true; break;
+    }
+    if (!placed) {
+      // 幾乎不會發生；保底找一個不相鄰的位置。
+      for (let i = 1; i < total; i++) {
+        if (!used.has(i) && !isAdjacent(i)) { used.add(i); specialSlots[i] = type; placed = true; break; }
+      }
+    }
+    if (!placed) {
+      for (let i = 1; i < total; i++) {
+        if (!used.has(i)) { used.add(i); specialSlots[i] = type; placed = true; break; }
+      }
+    }
+  }
+  const weights = ['blue', 'blue', 'blue', 'blue', 'red', 'red', 'red', 'yellow', 'yellow', 'green', 'green', 'green'];
+  return Array.from({ length: total }, (_, index) => {
+    if (index === 0) return { index, type: 'start', label: '出發', icon: '🚩', value: 0, stay: '在地圖四個角落取得紅、綠、藍、黃四種記號後，經過出發點可領取1000元補助金，領取後記號重置' };
+    const special = specialSlots[index];
+    if (special) {
+      const meta = SPECIAL_TILE_META[special];
+      return { index, type: special, special: true, label: meta.label, icon: meta.icon, value: 0, stay: meta.desc };
+    }
+    const type = weights[Math.floor(nextRandom(state) * weights.length)];
+    const labels = { blue: '發財', red: '蕭條', yellow: '技能', green: '事件' };
+    const icons = { blue: '💰', red: '📉', yellow: '⚡', green: '❓' };
+    const stays = {
+      blue: `發財格：獲得 ${blueValue} 總資產`, red: '蕭條格：扣除 150 營運費',
+      yellow: '技能格：補充 1 點技能能量', green: '事件格：抽一張即時事件'
+    };
+    return { index, type, label: labels[type], icon: icons[type], value: type === 'blue' ? blueValue : type === 'red' ? 150 : type === 'yellow' ? 1 : 0, stay: stays[type] };
+  });
+}
+
+function extInitGame(state, { mode = 'star', debug = false, target, rounds, starGoal, doomEvery, doomPrice, doomStep, startingCash } = {}) {
+  const seed = Number(state.seed) || Date.now();
+  const requested = extNormalizeMode(mode);
+  const actualMode = requested === 'random'
+    ? MODE_IDS[Math.abs(seed) % MODE_IDS.length]
+    : extNormalizeMode(requested);
+  const meta = GAME_MODES[actualMode];
+  const randomLocked = requested === 'random';
+  const resolvedRounds = randomLocked
+    ? (GAME_MODES[actualMode]?.defaultRounds || 20)
+    : (Number(rounds) || Number(meta.defaultRounds) || 10);
+  const resolvedTarget = randomLocked
+    ? (actualMode === 'tycoon' ? TYCOON_TARGET : 0)
+    : (Number(target) || Number(meta.defaultTarget) || 0);
+  const resolvedStarGoal = randomLocked
+    ? 3
+    : (Number(starGoal) || Number(meta.starGoal) || STAR_GOAL);
+  const resolvedDoomEvery = randomLocked ? DOOM_EVERY : Math.max(1, Number(doomEvery) || DOOM_EVERY);
+  const resolvedDoomPrice = randomLocked ? DOOM_START : Math.max(100, Number(doomPrice) || DOOM_START);
+  const resolvedDoomStep = randomLocked ? DOOM_STEP : Math.max(100, Number(doomStep) || DOOM_STEP);
+  const resolvedStartingCash = Number.isFinite(Number(startingCash)) ? Math.max(0, Math.round(Number(startingCash))) : START_CASH;
+  state.board = extBuildBoard(state, actualMode);
+  if (Number.isInteger(resolvedRounds)) state.maxRounds = clamp(resolvedRounds, 3, 30);
+  state.ext = {
+    version: EXT_VERSION,
+    mode: actualMode,
+    requestedMode: requested,
+    debug: Boolean(debug),
+    target: resolvedTarget,
+    targetAssets: resolvedTarget,
+    targetStars: resolvedStarGoal,
+    starPrice: STAR_PRICE_START,
+    starSold: 0,
+    inflation: 1,
+    inflationStage: 1,
+    doomPrice: resolvedDoomPrice,
+    doomStep: resolvedDoomStep,
+    doomCount: 0,
+    doomEvery: resolvedDoomEvery,
+    suddenDeath: false,
+    enraged: false,
+    auction: null,
+    investOffer: null,
+    taxChoice: null,
+    insiderOffer: null,
+    wheelResult: null,
+    forcedStarOffer: null,
+    vector: null,
+    domain: null,
+    certificates: [],
+    investmentSettlement: null,
+    history: [],
+    turnSnapshot: null,
+    doomEvent: null,
+    suddenDeathEvent: null,
+    pendingVictory: null,
+    finishTitle: null,
+    lastEvent: null,
+    noInflation: false,
+    noRedemption: false,
+    confirmed: [],
+    lobbyPlayers: null,
+    replicas: null,
+    starOffer: null,
+    replaceOffer: null,
+    eventPrompt: null,
+    wheelPending: null,
+    indulgenceEvent: null,
+    totemEvent: null,
+    vectorEvent: null,
+    vectorPending: null,
+    fateDice: null,
+    tycoonStreaks: {},
+    tycoonComeback: null
+  };
+  for (const p of state.players) {
+    extPlayerExt(p);
+    p.items = [];
+    p.mythics = [];
+    p.specials = [];
+    p.energy = 1;
+    p.shields = 0;
+    p.leverage = false;
+    p.forcedSteps = null;
+    p.bankLock = false;
+    p.noReward = false;
+    p.forcedRed = false;
+    p.skipTurns = 0;
+    p.rentTo = null;
+    p.rentTurns = 0;
+    p.parentId = null;
+    p.stars = 0;
+    p.cash = resolvedStartingCash;
+    p.ext.itemRound = null;
+  }
+  state.starGoal = resolvedStarGoal;
+  state.phase = 'roll';
+  state.lastRoll = null;
+  state.pendingDecision = null;
+  state.ghostPosition = 1 + Math.floor(nextRandom(state) * (state.board.length - 1));
+  state.ghostTrail = [];
+  state.effects = {};
+  state.log = [];
+  state.status = 'playing';
+  state.resultReason = null;
+  state.winnerIds = [];
+  const intro = mode === 'random'
+    ? `🎲 隨機模式抽中「${meta.name}」！${meta.win}`
+    : `${meta.icon} ${meta.name} 開始！${meta.win}`;
+  log(state, intro);
+  if (actualMode === 'star') log(state, `⭐ 出發格星價 ${extMoney(state.ext.starPrice)}，每賣出 1 顆全場 +${STAR_PRICE_STEP}。`);
+  if (actualMode === 'tycoon') log(state, `💰 總資產目標 ${extMoney(state.ext.target)}；季數過半通膨 2 倍，倒數兩季 4 倍。`);
+  if (actualMode === 'evil') log(state, `💀 每 ${state.ext.doomEvery} 季毀滅日收保護費，起步 ${extMoney(state.ext.doomPrice)}，每次收取後調漲 ${extMoney(state.ext.doomStep)}。`);
+  if (debug) log(state, '🧪 測試模式啟動：可無限擲骰、自由添加道具與傳送棋子。');
+  extRecordRound(state, 0, { initial: true });
+  startTurn(state);
+  return state;
+}
+
+function extEnsureState(state) {
+  if (!state || typeof state !== 'object') return state;
+  for (const p of state.players || []) extPlayerExt(p);
+  if (state.ext && state.ext.version) {
+    // 「經典派對」已移除；舊存檔自動升級成企業之星，避免留下幽靈模式。
+    if (state.ext.mode === 'classic' || !GAME_MODES[state.ext.mode]) state.ext.mode = extNormalizeMode(state.ext.mode);
+    if (state.ext.requestedMode === 'classic') state.ext.requestedMode = 'star';
+    state.ext.targetAssets = Number(state.ext.targetAssets ?? state.ext.target) || 0;
+    state.ext.targetStars = Number(state.ext.targetStars ?? state.starGoal) || STAR_GOAL;
+    if (!('eventPrompt' in state.ext)) state.ext.eventPrompt = null;
+    if (!('wheelPending' in state.ext)) state.ext.wheelPending = null;
+    if (!('indulgenceEvent' in state.ext)) state.ext.indulgenceEvent = null;
+    if (!('totemEvent' in state.ext)) state.ext.totemEvent = null;
+    if (!('vectorEvent' in state.ext)) state.ext.vectorEvent = null;
+    if (!('vectorPending' in state.ext)) state.ext.vectorPending = null;
+    if (!('fateDice' in state.ext)) state.ext.fateDice = null;
+    if (!state.ext.tycoonStreaks || typeof state.ext.tycoonStreaks !== 'object') state.ext.tycoonStreaks = {};
+    if (!('tycoonComeback' in state.ext)) state.ext.tycoonComeback = null;
+    if (!('pendingVictory' in state.ext)) state.ext.pendingVictory = null;
+    if (!('noRedemption' in state.ext)) state.ext.noRedemption = false;
+    const savedDoomStep = Number(state.ext.doomStep);
+    state.ext.doomStep = state.ext.requestedMode === 'random'
+      ? DOOM_STEP
+      : Math.max(100, Number.isFinite(savedDoomStep) ? savedDoomStep : DOOM_STEP);
+    return state;
+  }
+  state.board = Array.isArray(state.board) && state.board.length ? state.board : extBuildBoard(state);
+  state.ext = {
+    version: EXT_VERSION, mode: 'star', requestedMode: 'star', debug: false,
+    target: 3, targetAssets: 3, targetStars: 3, starPrice: STAR_PRICE_START, starSold: 0, inflation: 1, inflationStage: 1,
+    doomPrice: DOOM_START, doomStep: DOOM_STEP, doomCount: 0, doomEvery: DOOM_EVERY, suddenDeath: false, enraged: false,
+    auction: null, investOffer: null, taxChoice: null, insiderOffer: null, wheelResult: null,
+    forcedStarOffer: null, vector: null, domain: null, certificates: [], history: [],
+    turnSnapshot: null, doomEvent: null, suddenDeathEvent: null, pendingVictory: null, finishTitle: null, lastEvent: null,
+    noInflation: false, noRedemption: false, confirmed: [], lobbyPlayers: null, replicas: null, migrated: true,
+    starOffer: null, replaceOffer: null, eventPrompt: null, wheelPending: null,
+    indulgenceEvent: null, totemEvent: null, vectorEvent: null, vectorPending: null,
+    fateDice: null, tycoonStreaks: {}, tycoonComeback: null
+  };
+  if (!state.ghostPosition || state.ghostPosition <= 0) state.ghostPosition = 1;
+  extRecordRound(state, state.round || 1, { initial: true });
+  log(state, '📦 已將舊存檔升級為派對擴充格式（道具、星數與企業完整保留）。');
+  return state;
+}
+
+function extModeInfo(state) { return extMode(state); }
+function extIsDebug(state) { return Boolean(state?.ext?.debug); }
+
+function extGain(state, player, amount, label = '') {
+  if (!amount) return 0;
+  addCash(state, player, amount);
+  if (label) log(state, `${label}：${player.name} 獲得 ${extMoney(amount)} 總資產。`);
+  return amount;
+}
+
+// 贖罪券統一入口：所有扣款（含直接 addCash）都必須先經過這裡。
+function extTryRedeem(state, player, amount, label = '', { silent = false } = {}) {
+  if (!state?.ext || !player || amount <= 0 || state.ext.noRedemption) return false;
+  extPlayerExt(player);
+  const ticket = extMythicEntry(player, 'indulgence');
+  if (!ticket || ticket.charges <= 0) return false;
+  ticket.charges -= 1;
+  if (ticket.charges <= 0) player.mythics = player.mythics.filter(x => x.id !== 'indulgence');
+  if (!silent) log(state, `🎫 ${player.name} 的贖罪券自動抵銷「${label || '扣款'}」（剩 ${Math.max(0, ticket.charges)} 次）。`);
+  state.ext.indulgenceEvent = { playerId: player.id, label: label || '扣款', amount, remaining: Math.max(0, ticket.charges), at: Date.now() };
+  return true;
+}
+
+function extDamage(state, player, amount, { ignoreShield = false, ignoreRedemption = false, ignoreImmune = false, label = '', silent = false } = {}) {
+  amount = Math.round(Number(amount) || 0);
+  if (amount <= 0 || !player) return 0;
+  if (player.ext?.eliminated) return 0;
+  if (!ignoreImmune && (player.ext?.immune || player.ext?.bankai)) {
+    if (!silent) log(state, `🛡️ ${player.name} 的${player.ext?.bankai ? '卍解' : '無敵'}狀態無效化「${label || '負面效果'}」。`);
+    return 0;
+  }
+  if (!ignoreRedemption) {
+    if (extTryRedeem(state, player, amount, label, { silent })) return 0;
+  }
+  if (!ignoreShield && player.shields > 0) {
+    player.shields -= 1;
+    if (!silent) log(state, `🛡️ ${player.name} 的護盾擋下「${label || '負面效果'}」。`);
+    return 0;
+  }
+  if (ignoreRedemption && state.ext) {
+    state.ext.noRedemption = true;
+    try { addCash(state, player, -amount); }
+    finally { state.ext.noRedemption = false; }
+  } else {
+    addCash(state, player, -amount);
+  }
+  return amount;
+}
+
+function extTargets(state, excludeId) {
+  return state.players.filter(p => p.id !== excludeId && !p.ext?.eliminated);
+}
+
+function extSurvivors(state) {
+  return state.players.filter(p => !p.ext?.eliminated);
+}
+
+function extStatusChips(state, player) {
+  extPlayerExt(player);
+  const chips = [];
+  if (player.ext.eliminated) chips.push({ icon: '👻', label: '罷工團 · 已幽靈化', tone: 'bad' });
+  if (player.ext.frozen > 0) chips.push({ icon: '❄️', label: `凍結 ×${player.ext.frozen}`, tone: 'bad' });
+  if (player.ext.iceLock > 0) chips.push({ icon: '🧊', label: `冰封禁用技能／道具 ×${player.ext.iceLock}`, tone: 'bad' });
+  if (player.ext.burn > 0) chips.push({ icon: '🔥', label: '炎上：123 骰＋紅格加倍', tone: 'bad' });
+  if (player.ext.bankFreeze) chips.push({ icon: '🧊', label: '帳戶凍結', tone: 'bad' });
+  if (player.ext.bankai) chips.push({ icon: '🌀', label: '卍解中', tone: 'star' });
+  if (player.ext.immune) chips.push({ icon: '✨', label: '本回合無敵', tone: 'good' });
+  if (player.ext.forceOneNext) chips.push({ icon: '🌐', label: '下回合只能走 1 步', tone: 'bad' });
+  if (player.mythics?.length) chips.push({ icon: '🗿', label: `神話道具 ×${player.mythics.length}`, tone: 'star' });
+  if (state.ext?.domain && state.ext.domain.ownerId === player.id) chips.push({ icon: '🌐', label: '弱者領域展開中', tone: 'good' });
+  if (state.ext?.suddenDeath) chips.push({ icon: '⚡', label: '驟死賽', tone: 'bad' });
+  return chips;
+}
+
+// 弱者領域會即時跟隨擁有者位置，永遠覆蓋目前格與左右各一格。
+function extDomainTiles(state) {
+  const d = state?.ext?.domain;
+  if (!d) return [];
+  const owner = state.players.find(p => p.id === d.ownerId);
+  if (!owner || owner.ext?.eliminated) return [];
+  const len = boardOf(state).length;
+  const tiles = [-1, 0, 1].map(delta => (owner.position + delta + len) % len);
+  d.tiles = tiles;
+  return tiles;
+}
+
+function extInflationValue(state, amount) {
+  const ext = state?.ext;
+  if (!ext || ext.mode !== 'tycoon' || ext.noInflation) return amount;
+  return Math.round(amount * (ext.inflation || 1));
+}
+
+function extInflationStage(state) {
+  const ext = state?.ext;
+  if (!ext || ext.mode !== 'tycoon') return 0;
+  const half = Math.ceil(state.maxRounds / 2);
+  if (state.round > state.maxRounds - 2) return 4;
+  if (state.round > half) return 2;
+  return 1;
+}
+
+function extRefreshInflation(state, { announce = true, nextRound } = {}) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'tycoon') return;
+  const savedRound = state.round;
+  if (Number.isInteger(nextRound)) state.round = nextRound;
+  const next = extInflationStage(state);
+  state.round = savedRound;
+  if (next === ext.inflationStage) return;
+  const previous = ext.inflationStage;
+  ext.inflationStage = next;
+  ext.inflation = next === 1 ? 1 : next;
+  if (announce && next > previous && next >= 2) {
+    ext.lastEvent = { type: 'inflation', stage: next, text: next === 4 ? '通膨來襲！資產變動 4 倍！' : '通膨來襲！資產變動 2 倍！' };
+    log(state, `🚨 第 ${state.round} 季進入通膨第 ${next === 4 ? '二' : '一'}階段，所有賺與扣的錢變 ${next} 倍！`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 掛鉤註冊
+// ---------------------------------------------------------------------------
+engineHooks.roleExists = id => id === RANDOM_ROLE_ID || PARTY_ROLES.some(r => r.id === id) || ROLES.some(r => r.id === id);
+
+engineHooks.adjustCash = (state, player, amount) => {
+  const ext = state?.ext;
+  if (!ext) return amount;
+  let value = Number(amount) || 0;
+  if (ext.mode === 'tycoon' && !ext.noInflation && ext.inflation > 1) value *= ext.inflation;
+  if (value > 0 && player?.ext?.bankai) value += 100;
+  return Math.round(value);
+};
+
+engineHooks.canDrawItem = (state, player) => {
+  if (player.ext?.eliminated) return false;
+  if (player.ext?.bankai) { log(state, `🌀 ${player.name} 的卍解禁止獲取新道具。`); return false; }
+  return extItemCount(player) < 3;
+};
+engineHooks.itemAcquired = (state, player, itemId) => {
+  if (!player?.ext) return;
+  player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+  if (itemById(itemId)) {
+    if (!player.ext.itemRound || player.ext.itemRound.round !== state.round) {
+      player.ext.itemRound = { round: state.round, ids: [] };
+    }
+    player.ext.itemRound.ids.push(itemId);
+  }
+  extNoteItem(player, itemById(itemId)?.name || itemId);
+};
+
+function extCaptureRollSnapshot(state, player) {
+  if (!state?.ext) return null;
+  state.ext.turnSnapshot = clone({
+    playerId: player.id, round: state.round, turnIndex: state.turnIndex,
+    ghostPosition: state.ghostPosition, ghostTrail: state.ghostTrail, effects: state.effects,
+    cornerSubsidyEvent: state.cornerSubsidyEvent,
+    players: state.players.map(p => ({
+      id: p.id, cash: p.cash, stars: p.stars, energy: p.energy, shields: p.shields, items: p.items,
+      mythics: p.mythics, marks: p.marks, position: p.position, skipTurns: p.skipTurns, parentId: p.parentId, rentTo: p.rentTo,
+      rentTurns: p.rentTurns, leverage: p.leverage, bankLock: p.bankLock, noReward: p.noReward,
+      forcedRed: p.forcedRed, forcedSteps: p.forcedSteps, ext: p.ext
+    }))
+  });
+  return state.ext.turnSnapshot;
+}
+
+engineHooks.beforeRoll = (state, player) => extCaptureRollSnapshot(state, player);
+
+engineHooks.startTurn = (state, player) => {
+  const ext = extPlayerExt(player);
+  // createGame() 會先建立基礎 state 並呼叫一次 startTurn，此時擴充 state.ext 尚未建立。
+  if (!state.ext) return;
+  if (state.ext.starOffer) state.ext.starOffer = null;
+  if (ext.eliminated) {
+    // 罷工幽靈仍可正常擲骰與移動，只是不能使用技能／道具。
+    player.skipTurns = 0;
+    player.rentTo = null;
+    player.rentTurns = 0;
+    player.parentId = null;
+    ext.oneStepLock = false;
+    ext.noDiceItems = false;
+    log(state, `👻 ${player.name} 的幽靈回合開始，仍可擲骰移動（無法使用技能）。`);
+    return;
+  }
+  // 弱者的領域持續到擁有者下一次自己的回合開始才收束。
+  if (state.ext.domain) {
+    const owner = state.players.find(p => p.id === state.ext.domain.ownerId);
+    if (!owner || owner.ext?.eliminated || owner.id === player.id) {
+      log(state, `🌐 ${owner?.name || '玩家'} 的弱者的領域收束。`);
+      state.ext.domain = null;
+    }
+  }
+  player.ext.immune = false;
+  if (ext.frozen > 0) {
+    player.skipTurns = Math.max(player.skipTurns || 0, 1);
+    log(state, `❄️ ${player.name} 被寒冰蘑菇凍結，本回合無法行動（剩 ${ext.frozen} 回合）。`);
+  }
+  if (ext.iceLock > 0) {
+    log(state, `🧊 ${player.name} 被寒冰蘑菇封印，${ext.iceLock} 回合內禁用技能與道具。`);
+  }
+  if (ext.bankFreeze) {
+    log(state, `🧊 ${player.name} 的帳戶被凍結：這回合不能用道具，經過出發格也不能買星。`);
+  }
+  ext.oneStepLock = false;
+  if (ext.burn > 0) {
+    player.forcedSteps = 'low';
+    log(state, `🔥 ${player.name} 遭到炎上商法：本回合只能擲出 1–3，且踩紅格扣款翻倍。`);
+  }
+  if (ext.forceOneNext) {
+    ext.forceOneNext = false;
+    ext.noDiceItems = true;
+    ext.oneStepLock = true;
+    player.forcedSteps = 'one';
+    log(state, `🌐 弱者領域代價：${player.name} 本回合只能走 1 步，且禁用任何換骰道具。`);
+  } else if (!ext.burn) {
+    ext.noDiceItems = false;
+  }
+  if (ext.bankai) {
+    addCash(state, player, 100);
+    log(state, `🌀 ${player.name} 的卍解持續運作，本回合收益 +100。`);
+  }
+  // 弱者領域只在「進入」時扣款，由 afterRoll 處理；回合開始不重複扣款。
+  // 魔女因子快照已改為每次擲骰前由 beforeRoll 覆蓋。
+};
+
+engineHooks.canUse = (state, player, kind, itemId) => {
+  const ext = extPlayerExt(player);
+  if (ext.eliminated) return false;
+  if (ext.frozen > 0) return false;
+  if (ext.iceLock > 0) return false;
+  if (state.ext.domain) {
+    const d = state.ext.domain;
+    if (d.ownerId !== player.id && extDomainTiles(state).includes(player.position)) return false;
+  }
+  if (kind === 'item' && ext.oneStepLock && ['dice123', 'dice456', 'swap'].includes(itemId)) return false;
+  if (kind === 'item' && ext.noDiceItems && ['dice123', 'dice456'].includes(itemId)) return false;
+  if (kind === 'item' && ext.bankFreeze) return false;
+  return true;
+};
+engineHooks.blockedReason = (state, player, kind, itemId) => {
+  const ext = extPlayerExt(player);
+  if (ext.eliminated) return '罷工團幽靈無法使用技能或道具。';
+  if (ext.frozen > 0) return `被凍結中，還剩 ${ext.frozen} 回合。`;
+  if (ext.iceLock > 0) return `被寒冰蘑菇封印中，還剩 ${ext.iceLock} 回合無法使用技能與道具。`;
+  if (state.ext.domain && state.ext.domain.ownerId !== player.id && extDomainTiles(state).includes(player.position)) return '弱者的領域內禁用技能與道具。';
+  if (kind === 'item' && ext.oneStepLock && ['dice123', 'dice456', 'swap'].includes(itemId)) return '弱者領域代價：本回合只能走 1 步，不能改變步數或位置。';
+  if (kind === 'item' && ext.noDiceItems && ['dice123', 'dice456'].includes(itemId)) return '弱者領域代價：本回合禁用換骰道具。';
+  if (kind === 'item' && ext.bankFreeze) return '帳戶凍結中，本回合禁用道具。';
+  return '目前無法使用。';
+};
+
+// 矢量操作：使用者自己移動時，掃描出發、沿途與最後停留格。
+// 這些格子上的其他玩家會立刻被傳送到指定格，並強制結算該格效果。
+engineHooks.adjustMovePath = (state, player, fullPath, { from } = {}) => {
+  const ext = state.ext;
+  const vector = ext?.vector;
+  if (!vector || !vector.active || !Number.isInteger(vector.destination)) return null;
+  // 不是使用者本人移動，或使用者已幽靈化，都不能觸發。
+  if (vector.ownerId !== player.id || player.ext?.eliminated) return null;
+  if (vector.round !== state.round) { ext.vector = null; return null; }
+  const start = Number.isInteger(from) ? from : player.position;
+  const route = [start, ...fullPath];
+  const seen = new Set();
+  const candidates = [];
+  for (const tile of route) {
+    for (const other of state.players) {
+      if (other.id === player.id || other.ext?.eliminated || seen.has(other.id)) continue;
+      if (other.position !== tile) continue;
+      seen.add(other.id);
+      candidates.push({ playerId: other.id, name: other.name, from: other.position });
+    }
+  }
+  const destination = vector.destination;
+  ext.vector = null;
+  if (!candidates.length) {
+    log(state, `⬆️ ${player.name} 的矢量操作沒有在移動路徑上遇到其他玩家，能量消散。`);
+    return null;
+  }
+  log(state, `⬆️ ${player.name} 發動矢量操作，掃描移動路徑第 ${route.join('、')} 格。`);
+  return { path: fullPath, meta: { vector: { ownerId: player.id, destination, route, candidates } } };
+};
+
+// 贖罪券全域防禦：連蕭條格、租金、稅金、拍賣等直接扣款也必須先消耗一次。
+engineHooks.beforeCash = (state, player, amount) => {
+  if (!state?.ext || amount >= 0) return amount;
+  if (extTryRedeem(state, player, -amount, '總資產扣款')) return 0;
+  return amount;
+};
+
+// 全域負債淘汰：任何模式負債達 1,000 就化為罷工幽靈。
+engineHooks.afterCash = (state, player) => {
+  if (!state?.ext || state.status !== 'playing') return;
+  extCheckBankruptcy(state, player);
+};
+
+// 快速決策防呆：技能點不足的選項禁用；選項 C 預設隱藏，只有 A、B 都不可用時才顯示。
+function extWithQuickFallback(options) {
+  const list = (options || []).filter(o => o.id !== QUICK_DECISION_FALLBACK.id);
+  const fallbackVisible = !list.some(o => o.available !== false);
+  list.push({ ...QUICK_DECISION_FALLBACK, available: true, hidden: !fallbackVisible });
+  return list;
+}
+
+engineHooks.prepareDecision = (state, decision, player) => {
+  if (!decision?.options) return decision;
+  const options = decision.options.map(o => ({
+    ...o,
+    available: o.available !== false && !(o.cash < 0 && player.cash < -o.cash) && !(o.energy < 0 && player.energy < -o.energy)
+  }));
+  return { ...decision, options: extWithQuickFallback(options) };
+};
+
+engineHooks.resolveTile = (state, player, opts, effects) => {
+  const tile = boardOf(state)[player.position];
+  const ext = state.ext;
+  if (!tile?.special) return;
+  if (tile.type === 'market') {
+    const pool = MYTHIC_ITEMS.filter(x => !x.hidden && (!x.mode || x.mode === ext.mode));
+    const item = pool[Math.floor(nextRandom(state) * pool.length)] || MYTHIC_ITEMS[0];
+    const order = state.players.filter(p => !p.ext?.eliminated).map(p => p.id);
+    const startIndex = Math.max(0, order.indexOf(player.id));
+    ext.auction = {
+      tileIndex: tile.index, itemId: item.id, basePrice: 1000, currentPrice: 1000,
+      highestBidder: null, highestBid: 0, order, index: startIndex, currentId: order[startIndex] || null,
+      initiatorId: player.id, active: [...order], passed: []
+    };
+    effects.push({ icon: '🛒', text: '黑市拍賣開張：隱藏神話道具起標 1,000，每次抬價 250。', tone: 'event' });
+    log(state, `🛒 ${player.name} 停在黑市格，拍賣會開始！`);
+    return;
+  }
+  if (tile.type === 'invest') {
+    const cost = Math.floor(Math.max(0, player.cash) * 0.5);
+    ext.investOffer = { playerId: player.id, tileIndex: tile.index, cost };
+    effects.push({ icon: '📈', text: cost > 0 ? `投資格：可投入 ${extMoney(cost)}（50% 總資產）換取股票憑證。` : '投資格：目前沒有可投入的總資產。', tone: 'event' });
+    return;
+  }
+  if (tile.type === 'tax') {
+    ext.taxChoice = { playerId: player.id, tileIndex: tile.index };
+    effects.push({ icon: '🏛️', text: '查稅局：繳交 50% 總資產，或接受 2 回合羈押。', tone: 'bad' });
+    return;
+  }
+  if (tile.type === 'insider') {
+    ext.insiderOffer = { playerId: player.id, tileIndex: tile.index };
+    effects.push({ icon: '🌈', text: '內線交易：花 100 啟動命運輪盤。', tone: 'event' });
+    return;
+  }
+};
+
+// 事件格專屬提示：記下實際抽到的事件，讓 UI 在棋子停下後彈出專屬視窗。
+engineHooks.tileEvent = (state, player, event) => {
+  if (!state.ext) return;
+  state.ext.eventPrompt = {
+    playerId: player.id, eventId: event.id, name: event.name, icon: event.icon,
+    text: event.text, kind: event.kind, amount: event.amount, at: Date.now()
+  };
+};
+
+// 真正套用矢量傳送與受害者格子效果。互動流程會在 0.5 秒鎖定預警後才呼叫。
+function extApplyVectorResolution(state, vector, ownerId, roll = null) {
+  if (!state?.ext || !vector) return null;
+  const hits = [];
+  if (roll && !Array.isArray(roll.effects)) roll.effects = [];
+  for (const candidate of vector.candidates || []) {
+    const target = state.players.find(p => p.id === candidate.playerId);
+    if (!target || target.ext?.eliminated) continue;
+    const from = target.position;
+    target.position = vector.destination;
+    applyCornerProgress(state,target,[vector.destination]);
+    const effects = resolveTileFor(state, target, {});
+    const detail = effects.map(e => e.text).filter(Boolean).join('；');
+    hits.push({ playerId: target.id, name: target.name, from, to: vector.destination, effects });
+    if (roll) {
+      roll.effects.push({
+        icon: '⬆️',
+        text: `矢量操作：${target.name} 從第 ${from} 格被傳送到第 ${vector.destination} 格，強制觸發格子效果${detail ? `：${detail}` : '。'}`,
+        tone: 'event'
+      });
+    }
+    log(state, `⬆️ ${target.name} 被矢量操作傳送到第 ${vector.destination} 格並觸發效果${detail ? `：${detail}` : '。'}`);
+    // 若受害者觸發破產／終局，或魔女因子回溯全場，立刻停止後續傳送。
+    if (state.status !== 'playing' || state.ext.rewound) break;
+  }
+  if (!hits.length) return null;
+  const first = hits[0];
+  state.ext.vectorEvent = {
+    type: 'vector', ownerId, destination: vector.destination, route: vector.route,
+    hits, playerId: first.playerId, from: first.from, to: vector.destination, at: Date.now()
+  };
+  return state.ext.vectorEvent;
+}
+
+function extResolveVector(state, player, roll, { defer = false } = {}) {
+  const vector = roll?.vector;
+  if (!vector || !Array.isArray(vector.candidates) || !vector.candidates.length) return;
+  if (!Array.isArray(roll.effects)) roll.effects = [];
+  const ext = state.ext;
+  if (defer) {
+    if (!ext.vectorPending) {
+      const names = vector.candidates.map(c => c.name).filter(Boolean).join('、') || '目標';
+      ext.vectorPending = {
+        ownerId: player.id,
+        ownerName: player.name,
+        destination: vector.destination,
+        route: vector.route,
+        candidates: vector.candidates.map(c => ({ ...c })),
+        at: Date.now()
+      };
+      roll.effects.push({
+        icon: '🎯',
+        text: `矢量操作鎖定 ${names}，準備傳送到第 ${vector.destination} 格…`,
+        tone: 'event'
+      });
+      log(state, `🎯 ${player.name} 的矢量操作鎖定 ${names}，0.5 秒後執行傳送。`);
+    }
+    return;
+  }
+  extApplyVectorResolution(state, vector, player.id, roll);
+}
+
+// 由 UI 在鎖定預警結束後呼叫；只會套用一次，重複呼叫不會重複傳送。
+function extResolveVectorPending(state) {
+  const pending = state?.ext?.vectorPending;
+  if (!pending) return null;
+  state.ext.vectorPending = null;
+  if (state.status !== 'playing') return null;
+  const roll = state.lastRoll && state.lastRoll.playerId === pending.ownerId ? state.lastRoll : null;
+  const event = extApplyVectorResolution(state, pending, pending.ownerId, roll);
+  if (!event) return null;
+  // afterRoll 在延後流程中已先跑過一次；受害者被傳送後要重新檢查勝負與強買星。
+  extCheckWin(state);
+  if (state.status === 'playing') extMaybeForcedStar(state);
+  return event;
+}
+
+engineHooks.afterRoll = (state, player, roll, options = {}) => {
+  const ext = state.ext;
+  if (!ext || state.status !== 'playing') return;
+  const rewound = Boolean(ext.rewound);
+  if (rewound) {
+    ext.rewound = false;
+    roll.path = [player.position];
+    roll.tileIndex = player.position;
+    roll.tileType = boardOf(state)[player.position]?.type;
+    roll.effects = roll.effects.filter(e => e.icon === '🦠');
+    roll.passedStart = false;
+    roll.struck = false;
+  }
+  // 矢量操作在本次移動路徑確定後結算；被傳送的玩家會立即承受指定格效果。
+  if (!rewound) {
+    extResolveVector(state, player, roll, { defer: Boolean(options.deferVector) });
+    if (state.status !== 'playing') return;
+  }
+  // 弱者的領域即時跟隨擁有者位置；踏入當下才扣款。
+  const domainTiles = extDomainTiles(state);
+  if (ext.domain && ext.domain.ownerId !== player.id && domainTiles.includes(player.position)) {
+    const owner = state.players.find(p => p.id === ext.domain.ownerId);
+    const lost = extDamage(state, player, 100, { label: '弱者領域', silent: true });
+    const detail = lost > 0 ? `扣除 ${extMoney(lost)} 總資產` : '傷害被無效化';
+    roll.effects.push({ icon: '🌐', text: `踏入 ${owner?.name || '對手'} 的弱者的領域，${detail}。`, tone: 'bad' });
+    log(state, `🌐 ${player.name} 踏入弱者的領域，${detail}。`);
+    ext.lastEvent = { type: 'domainHit', playerId: player.id, ownerId: owner?.id, amount: lost, at: Date.now() };
+    if (state.status !== 'playing') return;
+  }
+  // 罷工幽靈移動後與存活玩家同格：強制該存活玩家觸發罷工。
+  if (player.ext?.eliminated) {
+    const victims = state.players.filter(p => p.id !== player.id && !p.ext?.eliminated && p.position === player.position);
+    for (const victim of victims) {
+      const strikeEffects = [];
+      engineHooks.ghostStrike(state, victim, strikeEffects);
+      const detail = strikeEffects.map(e => e.text).join(' ');
+      roll.effects.push({ icon: '👻', text: `${player.name} 的幽靈與 ${victim.name} 同格，強制觸發罷工！${detail ? ` ${detail}` : ''}`, tone: 'bad' });
+      log(state, `👻 ${player.name} 的幽靈纏上 ${victim.name}，強制觸發罷工。`);
+      if (state.status !== 'playing') return;
+    }
+  }
+  // 起點買星只認「本次移動經過或踩中」；開局站在原地不會建立邀請。
+  const touchedStart = Boolean(roll.passedStart) || (Array.isArray(roll.path) && roll.path.includes(0));
+  if (ext.mode === 'star' && !rewound && touchedStart && !player.ext?.bankFreeze && !player.ext?.eliminated) {
+    ext.starOffer = { playerId: player.id, price: extStarPrice(state), passed: Boolean(roll.passedStart), landed: player.position === 0 };
+  } else if (ext.starOffer?.playerId === player.id) {
+    ext.starOffer = null;
+  }
+  const tile = boardOf(state)[roll.tileIndex];
+  if (roll.struck || tile?.special) {
+    state.pendingDecision = null;
+    state.phase = 'resolve';
+  } else {
+    const scenario = QUICK_DECISIONS[Math.floor(nextRandom(state) * QUICK_DECISIONS.length)];
+    const options = scenario.options.map(o => ({
+      ...o,
+      available: !(o.cash < 0 && player.cash < -o.cash) && !(o.energy < 0 && player.energy < -o.energy)
+    }));
+    state.pendingDecision = {
+      playerId: player.id, kind: 'ext', scenarioId: scenario.id, title: scenario.name, icon: scenario.icon, text: scenario.text,
+      options: extWithQuickFallback(options)
+    };
+    state.phase = 'decision';
+  }
+  extRefreshInflation(state);
+  extCheckWin(state);
+  extMaybeForcedStar(state);
+};
+
+engineHooks.ghostStrike = (state, player, effects) => {
+  const ext = state.ext;
+  const penalty = 1000 * (ext?.enraged ? 2 : 1);
+  if (extHasMythic(player, 'witchFactor') && state.ext.turnSnapshot?.playerId === player.id) {
+    const snap = state.ext.turnSnapshot;
+    for (const saved of snap.players) {
+      const target = state.players.find(p => p.id === saved.id);
+      if (!target) continue;
+      Object.assign(target, {
+        cash: saved.cash, stars: saved.stars, energy: saved.energy, shields: saved.shields,
+        items: clone(saved.items), mythics: clone(saved.mythics), marks: clone(saved.marks), position: saved.position,
+        skipTurns: saved.skipTurns, parentId: saved.parentId, rentTo: saved.rentTo, rentTurns: saved.rentTurns,
+        leverage: saved.leverage, bankLock: saved.bankLock, noReward: saved.noReward,
+        forcedRed: saved.forcedRed, forcedSteps: saved.forcedSteps, ext: clone(saved.ext)
+      });
+    }
+    state.ghostPosition = snap.ghostPosition;
+    state.ghostTrail = snap.ghostTrail;
+    state.effects = clone(snap.effects);
+    state.cornerSubsidyEvent = clone(snap.cornerSubsidyEvent || null);
+    state.ext.rewound = true;
+    state.ext.lastEvent = { type: 'witch', playerId: player.id, at: Date.now() };
+    effects.push({ icon: '🦠', text: '魔女因子發動「死亡回歸」：全場狀態回溯至本次擲骰前！', tone: 'event' });
+    log(state, `🦠 ${player.name} 踩中幽靈，觸發死亡回歸，全場回到本次擲骰前。`);
+    return;
+  }
+  let lost = '';
+  const protectedByBankai = Boolean(player.ext?.bankai);
+  if (!protectedByBankai && player.items?.length) {
+    const i = Math.floor(nextRandom(state) * player.items.length);
+    const id = player.items.splice(i, 1)[0];
+    lost = itemById(id)?.name || id;
+  } else if (!protectedByBankai && player.mythics?.length) {
+    const i = Math.floor(nextRandom(state) * player.mythics.length);
+    const entry = player.mythics.splice(i, 1)[0];
+    lost = MYTHIC_BY_ID[entry.id]?.name || entry.id;
+  }
+  const paid = extDamage(state, player, penalty, { ignoreShield: true, ignoreRedemption: false, label: '罷工幽靈', silent: true });
+  const protectedNote = paid === 0
+    ? (player.ext?.bankai ? '，卍解完全免疫' : extHasMythic(player, 'indulgence') ? '，贖罪券抵銷扣款' : '，護盾或免疫抵銷扣款')
+    : '';
+  effects.push({ icon: '👻', text: `踩中罷工幽靈：扣除 ${extMoney(paid)} 總資產${protectedNote}${lost ? `，並沒收道具「${lost}」` : protectedByBankai ? '，卍解的免疫擋下了道具沒收' : '，但沒有道具可沒收'}${ext?.enraged ? '（憤怒狀態 ×2）' : ''}。`, tone: 'bad' });
+  log(state, `👻 ${player.name} 踩中罷工幽靈，損失 ${extMoney(paid)} 總資產${lost ? `與「${lost}」` : ''}${protectedNote}。`);
+  state.ext.lastEvent = {
+    type: 'ghostStrike', playerId: player.id, enraged: Boolean(ext?.enraged),
+    amount: paid, lost, at: Date.now()
+  };
+  extCheckWin(state);
+};
+
+engineHooks.grantCertificate = (state, player, amount) => {
+  const principal = Math.max(0, Math.round(Number(amount) || 0));
+  if (!principal) return null;
+  const cert = { id: `cert-${state.round}-${player.id}-${(state.ext.certificates || []).length}`, playerId: player.id, principal, round: state.round, resolved: false };
+  state.ext.certificates.push(cert);
+  log(state, `📈 ${player.name} 取得 ${extMoney(principal)} 股票憑證，季末結算。`);
+  return cert;
+};
+
+engineHooks.tileDamageBlocked = (state, player, type) => Boolean(type === 'red' && (player.ext?.immune || player.ext?.bankai));
+engineHooks.tileDamageMultiplier = (state, player, type) => (type === 'red' && player.ext?.burn > 0 ? 2 : 1);
+
+engineHooks.beforeEndTurn = (state, player) => {
+  const ext = state.ext;
+  if (!ext) return;
+  ext.forcedStarOffer = null;
+  // 矢量操作只屬於使用者自己的移動；若未擲骰就結束回合，直接收束。
+  if (ext.vector?.ownerId === player.id) {
+    ext.vector = null;
+    log(state, `⬆️ ${player.name} 未在移動中觸發矢量操作，能量消散。`);
+  }
+  // 未處理的起點買星／黑市滿包替換不得跨回合殘留，否則會鎖住下一位玩家。
+  if (ext.starOffer?.playerId === player.id) ext.starOffer = null;
+  if (ext.replaceOffer?.playerId === player.id) {
+    const offer = ext.replaceOffer;
+    ext.replaceOffer = null;
+    log(state, `🛒 ${player.name} 未處理新道具，系統自動丟棄「${MYTHIC_BY_ID[offer.itemId]?.name || itemById(offer.itemId)?.name || offer.itemId}」。`);
+  }
+  // 寒冰蘑菇／炎上／帳戶凍結以「完整回合」計算，於回合結束才遞減。
+  if (player.ext?.frozen > 0) player.ext.frozen -= 1;
+  if (player.ext?.iceLock > 0) player.ext.iceLock -= 1;
+  if (player.ext?.burn > 0) player.ext.burn -= 1;
+  if (player.ext?.bankFreeze) player.ext.bankFreeze = false;
+  if (player.ext?.noDiceItems) player.ext.noDiceItems = false;
+  if (player.ext?.oneStepLock) player.ext.oneStepLock = false;
+};
+
+engineHooks.moveGhost = state => {
+  const ext = state.ext;
+  if (ext?.debug) return;
+  const len = boardOf(state).length;
+  const baseSteps = 1 + Math.floor(nextRandom(state) * 3);
+  const steps = ext?.enraged ? Math.max(1, Math.round(baseSteps * 1.5)) : baseSteps;
+  const direction = nextRandom(state) < 0.5 ? -1 : 1;
+  const from = state.ghostPosition;
+  state.ghostTrail = [from, ...Array.from({ length: steps }, (_, i) => (from + direction * (i + 1) + len) % len)];
+  state.ghostPosition = state.ghostTrail.at(-1);
+  if (ext?.enraged) log(state, '⚡ 憤怒幽靈以 1.5 倍速度移動。');
+};
+
+engineHooks.afterRound = (state, finishedRound, { final } = {}) => {
+  const ext = state.ext;
+  if (!ext) return;
+  // 股票憑證季末結算
+  const unresolved = (ext.certificates || []).filter(c => !c.resolved);
+  const investmentResults = [];
+  for (const cert of unresolved) {
+    const roll = nextRandom(state);
+    let multiplier = 0, label = '龐氏騙局';
+    if (roll < 0.10) { multiplier = 3; label = '大牛市'; }
+    else if (roll < 0.50) { multiplier = 1.5; label = '平穩期'; }
+    const player = state.players.find(p => p.id === cert.playerId);
+    if (!player) continue;
+    const payout = Math.round(cert.principal * multiplier);
+    const prev = ext.noInflation; ext.noInflation = true;
+    if (payout > 0) addCash(state, player, payout);
+    ext.noInflation = prev;
+    cert.resolved = true;
+    cert.outcome = label;
+    cert.payout = payout;
+    investmentResults.push({ playerId: player.id, playerName: player.name, label, principal: cert.principal, payout });
+    log(state, `📈 ${player.name} 的股票憑證（本金 ${extMoney(cert.principal)}）季末結果：${label}，回收 ${extMoney(payout)}。`);
+    ext.lastEvent = { type: 'investment', playerId: player.id, label, payout, principal: cert.principal };
+  }
+  ext.investmentSettlement = investmentResults.length
+    ? { round: finishedRound, at: Date.now(), results: investmentResults }
+    : null;
+  ext.certificates = (ext.certificates || []).filter(c => !c.resolved || c.round === finishedRound);
+  // 弱者的領域改為持續到擁有者下一次自己的回合開始，由 startTurn 收束。
+  // 矢量操作只在本回合有效，若沒有玩家碰到指定格則季末失效。
+  if (ext.vector && ext.vector.round <= finishedRound) {
+    log(state, `⬆️ 矢量操作的指定格本回合沒有生效，能量消散。`);
+    ext.vector = null;
+  }
+  for (const p of state.players) if (!p.ext?.eliminated) p.ext.aliveSeasons = (p.ext.aliveSeasons || 0) + 1;
+  if (ext.mode === 'evil' && finishedRound > 0 && finishedRound % (ext.doomEvery || DOOM_EVERY) === 0) {
+    extTriggerDoom(state);
+  }
+  // 首富競爭專屬落後補償：以「本季結算後」的總資產排名計算連續墊底季數。
+  if (ext.mode === 'tycoon') extTycoonComeback(state);
+  extRecordRound(state, finishedRound, { final });
+  extRefreshInflation(state, { nextRound: Math.min(state.maxRounds, finishedRound + 1) });
+  // 企業之星／首富的達標勝利只在季末正式結算。
+  extCheckWin(state, { settle: true });
+};
+
+engineHooks.beforeFinal = (state, winners, ranked) => {
+  const ext = state.ext;
+  if (!ext) return null;
+  if ((ext.mode === 'star' || ext.mode === 'tycoon') && winners.length > 1 && !ext.suddenDeath) {
+    ext.suddenDeath = true;
+    ext.enraged = true;
+    ext.suddenDeathEvent = { winners: winners.map(p => p.name), round: state.round };
+    ext.lastEvent = { type: 'suddenDeath', winners: winners.map(p => p.name), round: state.round, at: Date.now() };
+    state.maxRounds += 2;
+    log(state, `⚡ 第一名平手，驟死賽啟動！罷工幽靈進入憤怒狀態：紅色圖標、移動 1.5 倍、扣錢 2 倍。`);
+    return { continue: true };
+  }
+  return null;
+};
+
+engineHooks.beforeFinish = (state, reason, winners) => {
+  const ext = state.ext;
+  if (!ext) return;
+  const alive = extSurvivors(state);
+  if (reason === 'survivor' || alive.length === 1) ext.finishTitle = '唯一的倖存者';
+  else if (reason === 'bankrupt' || alive.length === 0) ext.finishTitle = '無人生還';
+  else if (ext.mode === 'evil') ext.finishTitle = '邪惡企業結束';
+  else if (ext.mode === 'star') ext.finishTitle = '企業之星';
+  else if (ext.mode === 'tycoon') ext.finishTitle = '首富競爭';
+  else ext.finishTitle = extMode(state).name;
+};
+
+// ---------------------------------------------------------------------------
+// 模式與特殊格操作
+// ---------------------------------------------------------------------------
+function extCheckBankruptcy(state, changed) {
+  if (!state?.ext || state.status !== 'playing') return [];
+  const eliminated = [];
+  for (const p of state.players) {
+    if (p.ext?.eliminated) continue;
+    if (Number(p.cash) > -1000) continue;
+    extPlayerExt(p);
+    p.ext.eliminated = true;
+    p.ext.ghostRole = true;
+    p.ext.oneStepLock = false;
+    p.ext.forceOneNext = false;
+    if (state.ext.domain?.ownerId === p.id) state.ext.domain = null;
+    p.stars = 0;
+    p.cash = 0;
+    p.items = [];
+    p.mythics = [];
+    p.specials = [];
+    eliminated.push(p);
+    log(state, `💀 ${p.name} 負債達到 1,000，遭到市場淘汰，化為藍色罷工幽靈。`);
+  }
+  if (eliminated.length) {
+    const last = eliminated.at(-1);
+    state.ext.lastEvent = { type: 'bankrupt', playerId: last.id, names: eliminated.map(p => p.name), at: Date.now() };
+    extCheckWin(state);
+  }
+  return eliminated;
+}
+
+function extCheckWin(state, { settle = false } = {}) {
+  if (!state || state.status !== 'playing' || !state.ext) return false;
+  const ext = state.ext;
+  const alive = extSurvivors(state);
+  if (!alive.length) {
+    finish(state, 'bankrupt', []);
+    log(state, '🏁 全員負債淘汰，無人倖存。');
+    return true;
+  }
+  // 所有模式共用：只剩一位存活者就直接獲勝，其他人都已化為罷工幽靈。
+  if (alive.length === 1) {
+    finish(state, 'survivor', alive);
+    log(state, `🏁 ${alive[0].name} 是唯一的倖存者！`);
+    return true;
+  }
+  if (ext.mode === 'evil') return false;
+
+  let qualified = [];
+  let reason = null;
+  let target = 0;
+  if (ext.mode === 'star') {
+    qualified = state.players.filter(p => !p.ext?.eliminated && p.stars >= (state.starGoal || STAR_GOAL));
+    reason = 'stars';
+    target = state.starGoal || STAR_GOAL;
+  } else if (ext.mode === 'tycoon') {
+    target = Number(ext.target) || TYCOON_TARGET;
+    qualified = state.players.filter(p => !p.ext?.eliminated && p.cash >= target);
+    reason = 'target';
+  }
+  if (!qualified.length) {
+    // 如果在季中曾經達標、但季末前又失去資格，撤銷本季的達標提示。
+    if (ext.pendingVictory) ext.pendingVictory = null;
+    return false;
+  }
+
+  const playerIds = qualified.map(p => p.id);
+  const names = qualified.map(p => p.name);
+  const now = Date.now();
+  const changed = !ext.pendingVictory
+    || ext.pendingVictory.reason !== reason
+    || ext.pendingVictory.round !== state.round
+    || ext.pendingVictory.playerIds.join('|') !== playerIds.join('|');
+
+  // 達標不再立即結束：先記錄「本季將進行結算」，等季末 afterRound 才正式 finish。
+  ext.pendingVictory = {
+    reason, mode: ext.mode, playerIds, names, target, round: state.round,
+    at: changed ? now : (ext.pendingVictory?.at || now)
+  };
+  if (!settle) {
+    if (changed) {
+      const text = `${names.join('、')}已達標，本季將進行結算`;
+      ext.lastEvent = { type: 'victoryPending', mode: ext.mode, reason, playerIds, names, target, text, at: now };
+      log(state, `🏁 ${text}`);
+    }
+    return false;
+  }
+
+  ext.pendingVictory = null;
+  finish(state, reason, qualified);
+  log(state, reason === 'stars'
+    ? `🏁 季末結算：${names.join('、')} 達成 ${target} 顆星，成為企業之星！`
+    : `🏁 季末結算：${names.join('、')} 達到 ${extMoney(target)} 總資產，成為世界首富！`);
+  return true;
+}
+
+function extMaybeForcedStar(state) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'star') return;
+  const p = currentOf(state);
+  if (p.ext?.eliminated) { ext.forcedStarOffer = null; return; }
+  const stars = state.players.find(x => x.id !== p.id && !x.ext?.eliminated && x.position === p.position && x.stars > 0);
+  ext.forcedStarOffer = stars ? { playerId: p.id, targetId: stars.id, cost: ext.starPrice + FORCED_STAR_PREMIUM } : null;
+}
+
+function extStarPrice(state) { return Number(state.ext?.starPrice) || STAR_PRICE_START; }
+
+function extCanBuyStar(state) {
+  if (state.status !== 'playing' || !state.ext) return { ok: false, reason: '對局已結束' };
+  const p = currentOf(state);
+  const mode = state.ext.mode;
+  const offer = mode === 'star' && state.ext.starOffer?.playerId === p.id ? state.ext.starOffer : null;
+  // 起點邀請必須先由「經過／踩中出發格」建立；開局原地站立不得直接買星。
+  const phases = offer ? ['roll', 'resolve', 'decision'] : ['roll', 'resolve'];
+  if (!phases.includes(state.phase)) return { ok: false, reason: '現在無法買星' };
+  if (p.ext?.eliminated) return { ok: false, reason: '幽靈無法買星' };
+  if (p.ext?.bankFreeze) return { ok: false, reason: '帳戶凍結，這回合不能買星' };
+  if (mode === 'star') {
+    if (!offer) return { ok: false, reason: '企業之星模式需經過或停在出發格才能買星' };
+    if (p.stars >= (state.starGoal || STAR_GOAL)) return { ok: false, reason: '已達勝利星數' };
+    if (p.cash < extStarPrice(state)) return { ok: false, reason: `需要 ${extMoney(extStarPrice(state))} 總資產` };
+    return { ok: true, price: extStarPrice(state), offer: true };
+  }
+  if (p.stars >= (state.starGoal || STAR_GOAL)) return { ok: false, reason: '已達勝利星數' };
+  if (p.cash < STAR_COST) return { ok: false, reason: `需要 ${extMoney(STAR_COST)} 總資產` };
+  return { ok: true, price: STAR_COST };
+}
+
+function extBuyStar(state) {
+  const check = extCanBuyStar(state);
+  if (!check.ok) throw Error(check.reason);
+  const p = currentOf(state), ext = state.ext;
+  const price = check.price;
+  const prev = ext.noInflation; ext.noInflation = true;
+  addCash(state, p, -price);
+  ext.noInflation = prev;
+  p.stars += 1;
+  p.ext.starsBought = (p.ext.starsBought || 0) + 1;
+  if (ext.mode === 'star') {
+    ext.starSold = (ext.starSold || 0) + 1;
+    ext.starPrice = extStarPrice(state) + STAR_PRICE_STEP;
+    log(state, `⭐ ${p.name} 以 ${extMoney(price)} 買下第 ${p.stars} 顆星；全場星價升至 ${extMoney(ext.starPrice)}。`);
+  } else {
+    log(state, `⭐ ${p.name} 以 ${extMoney(price)} 買下第 ${p.stars} 顆併購星。`);
+  }
+  ext.starOffer = null;
+  extSyncStarBlade(state, p);
+  extCheckWin(state);
+  return p.stars;
+}
+
+function extSkipStarOffer(state) {
+  if (state.ext) state.ext.starOffer = null;
+  return true;
+}
+
+function extClearEventPrompt(state) {
+  if (state.ext) state.ext.eventPrompt = null;
+  return true;
+}
+
+function extForcedStarInfo(state) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'star') return null;
+  if (ext.forcedStarOffer) return ext.forcedStarOffer;
+  extMaybeForcedStar(state);
+  return ext.forcedStarOffer;
+}
+
+function extForcedBuyStar(state, targetId) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'star') throw Error('只有企業之星模式可以強買星星。');
+  const p = currentOf(state), target = state.players.find(x => x.id === targetId);
+  if (!target || target.id === p.id) throw Error('請選擇持有星星的對手。');
+  if (target.position !== p.position || target.stars <= 0) throw Error('必須與持有星星的玩家同格。');
+  const cost = extStarPrice(state) + FORCED_STAR_PREMIUM;
+  if (p.cash < cost) throw Error(`強買需要 ${extMoney(cost)} 總資產。`);
+  const prev = ext.noInflation; ext.noInflation = true;
+  addCash(state, p, -cost);
+  ext.noInflation = prev;
+  target.stars -= 1;
+  p.stars += 1;
+  extSyncStarBlade(state, target, '星星被強買');
+  extSyncStarBlade(state, p);
+  ext.forcedStarOffer = null;
+  log(state, `🌟 ${p.name} 支付 ${extMoney(cost)}（星價 ${extMoney(extStarPrice(state))} + 溢價 ${FORCED_STAR_PREMIUM}）強制買走 ${target.name} 的 1 顆星！此交易不會讓全場星價上漲。`);
+  extCheckWin(state);
+  return p.stars;
+}
+
+function extExtraStatusChips(state, player) { return extStatusChips(state, player); }
+
+// ---------------------------------------------------------------------------
+// 技能
+// ---------------------------------------------------------------------------
+function extUseSkill(state, targetId, sectorOrTile) {
+  if (state.status !== 'playing') throw Error('遊戲已結束。');
+  if (state.phase !== 'roll') throw Error('企業技能只能在擲骰前使用。');
+  const p = currentOf(state);
+  if (engineHooks.canUse && !engineHooks.canUse(state, p, 'skill')) throw Error(engineHooks.blockedReason?.(state, p, 'skill') || '目前無法使用技能。');
+  if (p.energy < 1) throw Error('技能能量不足，請先踩技能格或使用道具補充。');
+  const role = extRoleOf(p), skill = role.skill;
+  const target = state.players.find(x => x.id === targetId);
+  const others = extTargets(state, p.id);
+  if (skill.target === 'opponent' && !target) throw Error('請選擇一位對手作為技能目標。');
+  if (skill.target === 'tile' && !Number.isInteger(Number(sectorOrTile))) throw Error('請選擇一個格子。');
+  const result = [];
+  const damage = (who, amount, label, opts) => extDamage(state, who, amount, { label, ...(opts || {}) });
+  switch (role.id) {
+    case 'social': {
+      if (!target) throw Error('請選擇一位對手。');
+      if (target.ext?.bankai) { result.push(`${target.name} 的卍解無效化炎上效果`); break; }
+      target.ext.burn = Math.max(1, target.ext.burn || 0);
+      result.push(`${target.name} 下回合被炎上：只能擲 1–3，紅格扣款翻倍`);
+      break;
+    }
+    case 'hardware': {
+      if (!target) throw Error('請選擇一位對手。');
+      if (target.ext?.bankai) { result.push(`${target.name} 的卍解保護道具，計畫性報廢失效`); break; }
+      const normal = target.items || [], mythics = target.mythics || [];
+      if (normal.length) {
+        const i = Math.floor(nextRandom(state) * normal.length);
+        const id = normal.splice(i, 1)[0];
+        result.push(`摧毀 ${target.name} 的道具「${itemById(id)?.name || id}」`);
+      } else if (mythics.length) {
+        const i = Math.floor(nextRandom(state) * mythics.length);
+        const entry = mythics.splice(i, 1)[0];
+        result.push(`摧毀 ${target.name} 的神話道具「${MYTHIC_BY_ID[entry.id]?.name || entry.id}」`);
+      } else result.push(`${target.name} 沒有道具可摧毀`);
+      addCash(state, p, 200);
+      result.push('並轉化為自己 200 總資產');
+      break;
+    }
+    case 'ecommerce': {
+      let total = 0;
+      for (const other of others) total += damage(other, 80, skill.name) ? 80 : 0;
+      if (total) addCash(state, p, total);
+      p.ext.immune = true;
+      result.push(`吸取全場共 ${extMoney(total)} 總資產，本回合自己踩格效果無效化`);
+      break;
+    }
+    case 'investment': {
+      if (!target) throw Error('請選擇一位對手。');
+      const hit = damage(target, 150, skill.name, { ignoreShield: false });
+      if (hit) addCash(state, p, 150);
+      result.push(hit ? `偷取 ${target.name} 150 總資產` : `${target.name} 擋下了偷取`);
+      if (hit && target.cash < p.cash) {
+        let stolen = '';
+        if (p.ext?.bankai) {
+          result.push('對方資產較低，但卍解禁止獲取新道具，無法額外偷取');
+          break;
+        }
+        if (!extHasItemSpace(p)) {
+          result.push('對方資產較低，但你的道具欄已滿，無法額外偷取道具');
+          break;
+        }
+        if (target.items?.length) {
+          const i = Math.floor(nextRandom(state) * target.items.length);
+          const id = target.items.splice(i, 1)[0];
+          p.items.push(id);
+          stolen = itemById(id)?.name || id;
+        } else if (target.mythics?.length) {
+          const i = Math.floor(nextRandom(state) * target.mythics.length);
+          const entry = target.mythics.splice(i, 1)[0];
+          p.mythics.push(entry);
+          stolen = MYTHIC_BY_ID[entry.id]?.name || entry.id;
+        }
+        result.push(stolen ? `對方資產較低，額外偷走「${stolen}」` : '對方沒有道具可偷');
+      }
+      break;
+    }
+    case 'fastfood': {
+      let success = 0;
+      for (const other of others) if (damage(other, 100, skill.name)) success += 1;
+      if (success) addCash(state, p, success * 50);
+      result.push(`全場對手扣 100，成功 ${success} 人，自己回饋 ${success * 50}`);
+      break;
+    }
+    case 'delivery': {
+      const index = Number(sectorOrTile);
+      if (!Number.isInteger(index) || index < 1 || index >= boardOf(state).length) throw Error('幽靈不能放在出發格。');
+      state.ghostPosition = index;
+      state.ghostTrail = [];
+      result.push(`把罷工幽靈派到第 ${index} 格`);
+      break;
+    }
+    case 'bank': {
+      if (!target) throw Error('請選擇一位對手。');
+      if (target.ext?.bankai) { result.push(`${target.name} 的卍解無效化帳戶凍結`); break; }
+      target.ext.bankFreeze = true;
+      result.push(`${target.name} 下回合經過出發格無法買星，且禁用道具`);
+      break;
+    }
+    case 'property': {
+      if (!target) throw Error('請選擇一位對手。');
+      if (target.ext?.bankai) { result.push(`${target.name} 的卍解擋下強制徵收`); break; }
+      const len = boardOf(state).length;
+      const from = target.position;
+      const path=Array.from({length:3},(_,i)=>(from-i-1+len)%len);
+      target.position = path.at(-1);
+      applyCornerProgress(state,target,path,{passedStart:path.includes(0)&&target.position!==0});
+      const hit = damage(target, 200, skill.name);
+      if (hit) addCash(state, p, 200);
+      result.push(`${target.name} 被擊退 3 格${hit ? '，並被搶奪 200 總資產' : '，但護盾擋下了搶奪'}`);
+      break;
+    }
+    case 'green': {
+      const richest = [...others].sort((a, b) => b.cash - a.cash)[0];
+      if (richest) {
+        const hit = damage(richest, 300, skill.name);
+        result.push(`鎖定首富 ${richest.name}，${hit ? '扣除 300 總資產' : '但被護盾擋下'}`);
+      } else result.push('場上沒有其他對手');
+      break;
+    }
+    case 'cloud': {
+      if (!target) throw Error('請選擇一位對手。');
+      if (target.ext?.bankai) { result.push(`${target.name} 的卍解讓零日漏洞無功而返`); break; }
+      const stealItem = !p.ext?.bankai && (target.items?.length || target.mythics?.length) && extHasItemSpace(p) && nextRandom(state) < 0.5;
+      if (stealItem) {
+        if (target.items?.length) {
+          const i = Math.floor(nextRandom(state) * target.items.length);
+          const id = target.items.splice(i, 1)[0];
+          p.items.push(id);
+          result.push(`無視護盾，竊取 ${target.name} 的道具「${itemById(id)?.name || id}」`);
+        } else {
+          const i = Math.floor(nextRandom(state) * target.mythics.length);
+          const entry = target.mythics.splice(i, 1)[0];
+          p.mythics.push(entry);
+          result.push(`無視護盾，竊取 ${target.name} 的神話道具「${MYTHIC_BY_ID[entry.id]?.name || entry.id}」`);
+        }
+      } else if (target.energy > 0) {
+        target.energy -= 1;
+        result.push(`無視護盾，竊取 ${target.name} 1 點技能能量`);
+      } else {
+        result.push(`${target.name} 沒有能量或道具可竊取`);
+      }
+      break;
+    }
+    default: throw Error('此企業沒有可用技能。');
+  }
+  p.energy -= 1;
+  log(state, `${skill.icon} ${p.name} 發動「${skill.name}」：${result.join('；')}。`);
+  extCheckWin(state);
+  return { skill, result };
+}
+
+// ---------------------------------------------------------------------------
+// 神話道具
+// ---------------------------------------------------------------------------
+function extAddMythic(state, player, id, { silent = false } = {}) {
+  const meta = MYTHIC_BY_ID[id];
+  if (!meta || meta.hidden) return null;
+  if (meta.mode && meta.mode !== state.ext.mode) return null;
+  if (player?.ext?.bankai) {
+    if (!silent) log(state, `🌀 ${player.name} 的卍解禁止獲取新道具（含神話道具）。`);
+    return null;
+  }
+  extPlayerExt(player);
+  const existing = extMythicEntry(player, id);
+  if (existing && meta.charges) {
+    if (!silent) log(state, `🗿 ${player.name} 已持有「${meta.name}」，重複取得不會增加使用次數。`);
+    return meta;
+  }
+  if (!extHasItemSpace(player)) {
+    if (!silent) log(state, `🎒 ${player.name} 的道具欄已滿（3 格），無法取得「${meta.name}」。`);
+    return null;
+  }
+  player.mythics.push({ id, charges: meta.charges || 1 });
+  player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+  extNoteItem(player, meta.name);
+  if (!silent) log(state, `🗿 ${player.name} 取得神話道具「${meta.icon} ${meta.name}」。`);
+  return meta;
+}
+
+function extAddItem(state, player, itemId) {
+  const item = itemById(itemId);
+  if (!item) return false;
+  if (player.ext?.bankai) { log(state, `🌀 ${player.name} 的卍解禁止獲取新道具。`); return false; }
+  if (!extHasItemSpace(player)) return false;
+  player.items.push(itemId);
+  player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+  extNoteItem(player, item.name);
+  return true;
+}
+
+// 系統特殊道具獨立於普通與神話道具，但仍與道具欄共用 3 格。
+function extAddSpecial(state, player, id, { silent = false } = {}) {
+  const meta = SPECIAL_ITEM_BY_ID[id];
+  if (!meta) return null;
+  extPlayerExt(player);
+  if (player.ext?.bankai) {
+    if (!silent) log(state, `🌀 ${player.name} 的卍解禁止獲取新道具（含特殊道具）。`);
+    return null;
+  }
+  if (!extHasItemSpace(player)) {
+    if (!silent) log(state, `🎒 ${player.name} 的道具欄已滿（3 格），無法取得「${meta.name}」。`);
+    return null;
+  }
+  player.specials.push(id);
+  player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+  extNoteItem(player, meta.name);
+  if (!silent) log(state, `✨ ${player.name} 取得特殊道具「${meta.icon} ${meta.name}」。`);
+  return meta;
+}
+
+// 落後補償：優先替換該玩家本季剛抽到的普通道具，否則在空位放入或替換最後一個普通道具。
+function extGrantFateDice(state, player) {
+  extPlayerExt(player);
+  let replaced = null;
+  const roundItems = player.ext?.itemRound?.round === state.round ? player.ext.itemRound.ids : [];
+  for (let i = roundItems.length - 1; i >= 0; i -= 1) {
+    const index = player.items.lastIndexOf(roundItems[i]);
+    if (index >= 0) {
+      const id = player.items.splice(index, 1)[0];
+      replaced = itemById(id)?.name || id;
+      break;
+    }
+  }
+  if (!replaced && !extHasItemSpace(player) && player.items?.length) {
+    const id = player.items.pop();
+    replaced = itemById(id)?.name || id;
+  }
+  const meta = extAddSpecial(state, player, FATE_DICE_ID, { silent: true });
+  if (!meta) return null;
+  if (replaced) {
+    log(state, `✨ ${player.name} 的落後補償生效：將本季獲得的「${replaced}」替換為特殊道具「${meta.icon} ${meta.name}」。`);
+  } else {
+    log(state, `✨ ${player.name} 的落後補償生效：獲得特殊道具「${meta.icon} ${meta.name}」。`);
+  }
+  return { meta, replaced };
+}
+
+function extTycoonComeback(state) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'tycoon') return;
+  const alive = state.players.filter(p => !p.ext?.eliminated);
+  if (alive.length < 2) return;
+  const lowestCash = Math.min(...alive.map(p => Number(p.cash) || 0));
+  const lowest = alive.filter(p => (Number(p.cash) || 0) === lowestCash);
+  const streaks = ext.tycoonStreaks && typeof ext.tycoonStreaks === 'object' ? ext.tycoonStreaks : (ext.tycoonStreaks = {});
+  for (const p of state.players) {
+    const previous = Math.max(0, Number(streaks[p.id]) || 0);
+    if (p.ext?.eliminated) streaks[p.id] = 0;
+    else if (lowest.some(x => x.id === p.id)) streaks[p.id] = previous + 1;
+    else streaks[p.id] = 0;
+  }
+  for (const p of lowest) {
+    const streak = Number(streaks[p.id]) || 0;
+    if (streak < TYCOON_COMEBACK_SEASONS || streak % TYCOON_COMEBACK_SEASONS !== 0) continue;
+    const result = extGrantFateDice(state, p);
+    ext.tycoonComeback = {
+      playerId: p.id, name: p.name, streak,
+      granted: Boolean(result), replaced: result?.replaced || null, at: Date.now()
+    };
+    ext.lastEvent = { type: 'tycoonComeback', ...ext.tycoonComeback };
+    if (!result) {
+      log(state, `🎲 ${p.name} 已連續 ${streak} 季總資產墊底，但道具欄沒有可替換的普通道具，命運骰子無法發放。`);
+    }
+  }
+}
+
+// 命運骰子：先展開自選面板，玩家選定 1–6 後才消耗道具並由 UI 觸發擲骰。
+function extPrepareFateDice(state) {
+  if (state.status !== 'playing') throw Error('遊戲已結束。');
+  if (state.phase !== 'roll') throw Error('命運骰子只能在擲骰前使用。');
+  const p = currentOf(state);
+  if (!extHasSpecial(p, FATE_DICE_ID)) throw Error('你沒有命運骰子。');
+  if (engineHooks.canUse && !engineHooks.canUse(state, p, 'item', FATE_DICE_ID)) {
+    throw Error(engineHooks.blockedReason?.(state, p, 'item', FATE_DICE_ID) || '目前無法使用。');
+  }
+  state.ext.fateDice = { playerId: p.id, round: state.round, at: Date.now() };
+  log(state, `🎲 ${p.name} 展開命運骰子，自選 1–6 步。`);
+  return state.ext.fateDice;
+}
+
+function extCancelFateDice(state) {
+  if (state?.ext?.fateDice) {
+    state.ext.fateDice = null;
+    return true;
+  }
+  return false;
+}
+
+function extUseFateDice(state, value) {
+  const step = Number(value);
+  if (!Number.isInteger(step) || step < 1 || step > 6) throw Error('命運骰子只能選擇 1–6。');
+  if (state.status !== 'playing') throw Error('遊戲已結束。');
+  if (state.phase !== 'roll') throw Error('命運骰子只能在擲骰前使用。');
+  const p = currentOf(state);
+  if (state.ext?.fateDice && state.ext.fateDice.playerId !== p.id) throw Error('現在不是你的命運骰子選擇。');
+  const index = (p.specials || []).indexOf(FATE_DICE_ID);
+  if (index < 0) throw Error('你沒有命運骰子。');
+  if (engineHooks.canUse && !engineHooks.canUse(state, p, 'item', FATE_DICE_ID)) {
+    throw Error(engineHooks.blockedReason?.(state, p, 'item', FATE_DICE_ID) || '目前無法使用。');
+  }
+  p.specials.splice(index, 1);
+  state.ext.fateDice = null;
+  log(state, `🎲 ${p.name} 使用命運骰子，鎖定前進 ${step} 步。`);
+  return step;
+}
+
+function extDiscard(state, player, kind, index) {
+  extPlayerExt(player);
+  if (kind === 'normal') {
+    if (index < 0 || index >= player.items.length) throw Error('道具不存在。');
+    const id = player.items.splice(index, 1)[0];
+    log(state, `🗑️ ${player.name} 丟棄道具「${itemById(id)?.name || id}」。`);
+  } else if (kind === 'special') {
+    if (index < 0 || index >= (player.specials || []).length) throw Error('特殊道具不存在。');
+    const id = player.specials.splice(index, 1)[0];
+    log(state, `🗑️ ${player.name} 丟棄特殊道具「${SPECIAL_ITEM_BY_ID[id]?.name || id}」。`);
+  } else {
+    if (index < 0 || index >= (player.mythics || []).length) throw Error('神話道具不存在。');
+    const entry = player.mythics.splice(index, 1)[0];
+    if (entry.id === 'bankai' && player.ext) player.ext.bankai = false;
+    log(state, `🗑️ ${player.name} 丟棄神話道具「${MYTHIC_BY_ID[entry.id]?.name || entry.id}」。`);
+  }
+}
+
+function extUseMythic(state, itemId, payload = {}) {
+  if (state.status !== 'playing') throw Error('遊戲已結束。');
+  if (state.phase !== 'roll') throw Error('神話道具只能在擲骰前使用。');
+  const p = currentOf(state);
+  extPlayerExt(p);
+  if (!extMythicEntry(p, itemId)) throw Error('你沒有這個神話道具。');
+  const meta = MYTHIC_BY_ID[itemId];
+  if (engineHooks.canUse && !engineHooks.canUse(state, p, 'item', itemId)) throw Error(engineHooks.blockedReason?.(state, p, 'item', itemId) || '目前無法使用。');
+  // canUse() 會正規化玩家狀態，因此在檢查後重新取得目前的神話道具物件。
+  const entry = extMythicEntry(p, itemId);
+  if (!entry) throw Error('你沒有這個神話道具。');
+  switch (itemId) {
+    case 'vector': {
+      const index = Number(payload.tileIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= boardOf(state).length) throw Error('請選擇一個有效格子。');
+      state.ext.vector = { ownerId: p.id, destination: index, round: state.round, active: true };
+      p.mythics = p.mythics.filter(x => x.id !== itemId);
+      log(state, `⬆️ ${p.name} 在地圖第 ${index} 格佈下矢量操作：本回合自己移動時，路徑上的其他玩家會被傳送到該格並觸發效果。`);
+      break;
+    }
+    case 'truthGate': {
+      if (entry.charges <= 0) throw Error('真理之門已耗盡。');
+      if (payload.mode === 'sell') {
+        if (!(p.items?.length || p.mythics?.length)) throw Error('背包裡沒有道具可以煉成金錢。');
+        const kind = payload.kind === 'mythic' ? 'mythic' : 'normal';
+        if (kind === 'normal') {
+          const idx = Number(payload.index);
+          if (idx < 0 || idx >= p.items.length) throw Error('道具不存在。');
+          const id = p.items.splice(idx, 1)[0];
+          addCash(state, p, 1000);
+          log(state, `🚪 ${p.name} 用真理之門把「${itemById(id)?.name || id}」煉成 1,000 總資產。`);
+        } else {
+          const idx = Number(payload.index);
+          if (idx < 0 || idx >= p.mythics.length) throw Error('神話道具不存在。');
+          const removed = p.mythics.splice(idx, 1)[0];
+          if (removed.id === 'bankai') p.ext.bankai = false;
+          addCash(state, p, 1000);
+          log(state, `🚪 ${p.name} 用真理之門把「${MYTHIC_BY_ID[removed.id]?.name}」煉成 1,000 總資產。`);
+        }
+      } else {
+        const id = payload.itemId;
+        if (payload.mythic || MYTHIC_BY_ID[id] || !itemById(id)) throw Error('金錢轉道具只能煉成普通道具。');
+        if (p.cash < 1000) throw Error('需要 1,000 總資產才能煉成道具。');
+        if (p.ext?.bankai) throw Error('卍解期間禁止獲取新道具。');
+        if (!extHasItemSpace(p)) throw Error('道具欄已滿（3 格）。');
+        const prev = state.ext.noInflation; state.ext.noInflation = true;
+        addCash(state, p, -1000);
+        state.ext.noInflation = prev;
+        extAddItem(state, p, id);
+        log(state, `🚪 ${p.name} 用真理之門把 1,000 總資產煉成「${itemById(id)?.name || id}」。`);
+      }
+      entry.charges -= 1;
+      if (entry.charges <= 0) p.mythics = p.mythics.filter(x => x.id !== itemId);
+      break;
+    }
+    case 'iceMushroom': {
+      const frozen = [], resisted = [];
+      for (const other of extTargets(state, p.id)) {
+        if (other.ext?.bankai) { resisted.push(other.name); continue; }
+        other.ext.frozen = Math.max(other.ext.frozen || 0, 1);
+        other.ext.iceLock = Math.max(other.ext.iceLock || 0, 3);
+        frozen.push(other.name);
+      }
+      p.mythics = p.mythics.filter(x => x.id !== itemId);
+      state.ext.lastEvent = { type: 'iceMushroom', playerId: p.id, frozen: frozen.slice(), at: Date.now() };
+      log(state, `❄️ ${p.name} 使用寒冰蘑菇：${frozen.length} 位玩家被凍結 1 回合，且 3 回合內禁用技能與道具${resisted.length ? `；${resisted.join('、')} 的卍解免疫` : ''}。`);
+      break;
+    }
+    case 'weakDomain': {
+      if (p.ext.domainUsedRound === state.round) throw Error('弱者的領域本回合已經展開過。');
+      state.ext.domain = { ownerId: p.id, round: state.round, tiles: [] };
+      const tiles = extDomainTiles(state);
+      p.ext.domainUsedRound = state.round;
+      p.ext.forceOneNext = true;
+      log(state, `🌐 ${p.name} 展開弱者的領域（目前第 ${tiles.join('、')} 格，會跟隨移動），進入者扣 100；代價是下回合只能走 1 步。`);
+      break;
+    }
+    case 'totem':
+    case 'indulgence':
+    case 'starBlade':
+    case 'bankai':
+    case 'witchFactor':
+      throw Error('這是被動道具，會自動觸發。');
+    default:
+      throw Error('此神話道具目前無法使用。');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 黑市拍賣 / 投資 / 查稅 / 內線交易
+// ---------------------------------------------------------------------------
+function extAuctionCurrent(state) {
+  const a = state.ext?.auction;
+  if (!a || !a.currentId) return null;
+  return state.players.find(p => p.id === a.currentId) || null;
+}
+
+function extAuctionAdvance(state, a) {
+  for (let i = 0; i < a.order.length; i++) {
+    a.index = (a.index + 1) % a.order.length;
+    const id = a.order[a.index];
+    if (a.active.includes(id)) { a.currentId = id; return id; }
+  }
+  a.currentId = null;
+  return null;
+}
+
+function extAuctionAction(state, action) {
+  const a = state.ext?.auction;
+  if (!a) throw Error('目前沒有拍賣。');
+  const player = extAuctionCurrent(state);
+  if (!player) return extAuctionFinish(state);
+  if (action === 'bid') {
+    a.highestBidder = player.id;
+    a.highestBid = a.currentPrice;
+    a.currentPrice += 250;
+    log(state, `🛒 ${player.name} 出價 ${extMoney(a.highestBid)}。`);
+    if (a.active.length === 1) return extAuctionFinish(state);
+  } else {
+    a.active = a.active.filter(id => id !== player.id);
+    a.passed.push(player.id);
+    // 踩到黑市的玩家放棄時，整場黑市事件立即結束，不再詢問後續玩家。
+    if (player.id === a.initiatorId) {
+      log(state, `🛒 ${player.name} 放棄競標，黑市拍賣直接結束。`);
+      return extAuctionFinish(state);
+    }
+    log(state, `🛒 ${player.name} 放棄競標。`);
+    if (!a.active.length) return extAuctionFinish(state);
+    if (a.active.length === 1 && a.active[0] === a.highestBidder) return extAuctionFinish(state);
+  }
+  extAuctionAdvance(state, a);
+  return { pending: true, player: extAuctionCurrent(state) };
+}
+
+function extAuctionFinish(state) {
+  const a = state.ext.auction;
+  if (!a) return null;
+  const winner = state.players.find(p => p.id === a.highestBidder);
+  const meta = MYTHIC_BY_ID[a.itemId];
+  let gained = false;
+  if (winner && a.highestBid > 0) {
+    const prev = state.ext.noInflation; state.ext.noInflation = true;
+    addCash(state, winner, -a.highestBid);
+    state.ext.noInflation = prev;
+    if (winner.ext?.bankai) {
+      log(state, `🛒 ${winner.name} 以 ${extMoney(a.highestBid)} 得標，但卍解禁止獲取新道具，「${meta?.name}」消散了。`);
+    } else if (extHasItemSpace(winner)) {
+      gained = Boolean(extAddMythic(state, winner, a.itemId, { silent: true }));
+      if (gained) log(state, `🛒 拍賣成交！${winner.name} 以 ${extMoney(a.highestBid)} 標下「${meta?.icon} ${meta?.name}」。`);
+    } else {
+      state.ext.replaceOffer = { playerId: winner.id, itemId: a.itemId, itemKind: 'mythic', price: a.highestBid, source: 'auction' };
+      log(state, `🛒 ${winner.name} 以 ${extMoney(a.highestBid)} 得標，但背包已滿，需選擇替換或丟棄新道具。`);
+    }
+  } else {
+    log(state, `🛒 本場黑市流標，隱藏道具「${meta?.name}」沒有賣出。`);
+  }
+  state.ext.auction = null;
+  extCheckWin(state);
+  return { finished: true, winner: gained ? winner?.name : null, pendingReplace: Boolean(state.ext.replaceOffer), failedWinner: gained || state.ext.replaceOffer ? null : winner?.name || null, itemId: a.itemId, price: a.highestBid || 0 };
+}
+
+function extResolveReplace(state, { dropNew = false, kind, index } = {}) {
+  const offer = state.ext?.replaceOffer;
+  if (!offer) throw Error('目前沒有待處理的新道具。');
+  const player = state.players.find(p => p.id === offer.playerId);
+  const offerKind = offer.itemKind === 'normal' ? 'normal' : 'mythic';
+  const meta = offerKind === 'mythic' ? MYTHIC_BY_ID[offer.itemId] : itemById(offer.itemId);
+  state.ext.replaceOffer = null;
+  if (!player) return false;
+  if (offerKind === 'mythic') {
+    extPlayerExt(player);
+    if (meta?.charges && extMythicEntry(player, offer.itemId)) {
+      log(state, `🛒 ${player.name} 已持有「${meta?.name || offer.itemId}」，重複取得不增加使用次數。`);
+      return false;
+    }
+  }
+  if (dropNew) {
+    log(state, `🛒 ${player.name} 丟棄剛獲得的「${meta?.name || offer.itemId}」。`);
+    return false;
+  }
+  if (kind === 'mythic') {
+    if (index < 0 || index >= (player.mythics || []).length) throw Error('要替換的神話道具不存在。');
+    const removed = player.mythics.splice(index, 1)[0];
+    if (removed.id === 'bankai' && player.ext) player.ext.bankai = false;
+    log(state, `🗑️ ${player.name} 捨棄「${MYTHIC_BY_ID[removed.id]?.name || removed.id}」騰出欄位。`);
+  } else if (kind === 'special') {
+    if (index < 0 || index >= (player.specials || []).length) throw Error('要替換的特殊道具不存在。');
+    const removed = player.specials.splice(index, 1)[0];
+    log(state, `🗑️ ${player.name} 捨棄特殊道具「${SPECIAL_ITEM_BY_ID[removed]?.name || removed}」騰出欄位。`);
+  } else {
+    if (index < 0 || index >= player.items.length) throw Error('要替換的道具不存在。');
+    const id = player.items.splice(index, 1)[0];
+    log(state, `🗑️ ${player.name} 捨棄「${itemById(id)?.name || id}」騰出欄位。`);
+  }
+  let gained = false;
+  if (offerKind === 'normal') {
+    player.items.push(offer.itemId);
+    player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+    extNoteItem(player, meta?.name || offer.itemId);
+    gained = true;
+    log(state, `🎒 ${player.name} 將「${meta?.name || offer.itemId}」放入道具欄。`);
+  } else if (offer.source === 'debug') {
+    player.mythics.push({ id: offer.itemId, charges: meta?.charges || 1 });
+    if (offer.itemId === 'bankai') player.ext.bankai = true;
+    player.ext.itemsAcquired = (player.ext.itemsAcquired || 0) + 1;
+    extNoteItem(player, meta?.name || offer.itemId);
+    gained = true;
+    log(state, `🎒 ${player.name} 將神話道具「${meta?.name || offer.itemId}」放入道具欄。`);
+  } else {
+    gained = Boolean(extAddMythic(state, player, offer.itemId));
+  }
+  if (!gained) log(state, `🛒 ${player.name} 仍無法放入「${meta?.name}」。`);
+  return gained;
+}
+
+function extInvest(state, accept) {
+  const offer = state.ext?.investOffer;
+  if (!offer) throw Error('目前沒有投資機會。');
+  const p = state.players.find(x => x.id === offer.playerId);
+  state.ext.investOffer = null;
+  if (!accept || !p) return false;
+  if (offer.cost <= 0 || p.cash < offer.cost) throw Error('總資產不足，無法投資。');
+  const prev = state.ext.noInflation; state.ext.noInflation = true;
+  addCash(state, p, -offer.cost);
+  state.ext.noInflation = prev;
+  state.ext.certificates.push({ id: `cert-${state.round}-${p.id}-${state.ext.certificates.length}`, playerId: p.id, principal: offer.cost, round: state.round, resolved: false });
+  p.ext.itemsAcquired = (p.ext.itemsAcquired || 0) + 0;
+  log(state, `📈 ${p.name} 投入 ${extMoney(offer.cost)} 取得股票憑證，季末結算。`);
+  return true;
+}
+
+function extTaxPay(state) {
+  const offer = state.ext?.taxChoice;
+  if (!offer) throw Error('目前沒有查稅。');
+  const p = state.players.find(x => x.id === offer.playerId);
+  state.ext.taxChoice = null;
+  if (!p) return 0;
+  const amount = Math.floor(Math.max(0, p.cash) * 0.5);
+  const paid = extDamage(state, p, amount, { ignoreShield: true, label: '查稅局 50% 總資產' });
+  log(state, `🏛️ ${p.name} 選擇繳稅 ${extMoney(paid || amount)}${paid === 0 && amount > 0 ? '（由贖罪券全額抵銷）' : ''}。`);
+  return paid;
+}
+
+function extTaxDetain(state) {
+  const offer = state.ext?.taxChoice;
+  if (!offer) throw Error('目前沒有查稅。');
+  const p = state.players.find(x => x.id === offer.playerId);
+  state.ext.taxChoice = null;
+  if (!p) return;
+  p.skipTurns = (p.skipTurns || 0) + 2;
+  log(state, `🏛️ ${p.name} 拒絕繳稅，被強制羈押 2 回合。`);
+}
+
+function extInsiderPay(state) {
+  const offer = state.ext?.insiderOffer;
+  if (!offer) throw Error('目前沒有內線交易。');
+  const p = state.players.find(x => x.id === offer.playerId);
+  state.ext.insiderOffer = null;
+  if (!p) return null;
+  if (p.cash < 100) { log(state, `🌈 ${p.name} 總資產不足 100，無法啟動輪盤。`); return null; }
+  const prev = state.ext.noInflation; state.ext.noInflation = true;
+  addCash(state, p, -100);
+  state.ext.noInflation = prev;
+  const result = extPrepareWheel(state, p);
+  // 用完後變回普通格，並在隨機普通格生成新的交易格
+  const board = boardOf(state);
+  const old = board.find(t => t.index === offer.tileIndex);
+  if (old) {
+    const types = NORMAL_TILE_TYPES;
+    const type = types[Math.floor(nextRandom(state) * types.length)];
+    const labels = { blue: '發財', red: '蕭條', yellow: '技能', green: '事件' };
+    const icons = { blue: '💰', red: '📉', yellow: '⚡', green: '❓' };
+    Object.assign(old, { type, label: labels[type], icon: icons[type], special: false, value: type === 'blue' ? 300 : type === 'red' ? 150 : type === 'yellow' ? 1 : 0, stay: `${labels[type]}格` });
+  }
+  const len = board.length;
+  const specialAt = i => board.some(t => t.special && t.index === ((i % len) + len) % len);
+  const candidates = board.filter(t => t.index !== 0 && t.index !== offer.tileIndex && !t.special
+    && !specialAt(t.index - 1) && !specialAt(t.index + 1));
+  const fallback = board.filter(t => t.index !== 0 && t.index !== offer.tileIndex && !t.special);
+  const pool = candidates.length ? candidates : fallback;
+  if (pool.length) {
+    const target = pool[Math.floor(nextRandom(state) * pool.length)];
+    Object.assign(target, { type: 'insider', special: true, label: '內線交易', icon: '🌈', value: 0, stay: SPECIAL_TILE_META.insider.desc });
+    log(state, `🌈 新的內線交易格在第 ${target.index} 格生成。`);
+  }
+  extCheckWin(state);
+  return result;
+}
+
+// 只抽結果、不立即生效；UI 轉盤停止後必須等待玩家按下確認，才呼叫 extResolveWheel。
+function extPrepareWheel(state, player) {
+  const ext = state.ext;
+  const pool = WHEEL_EFFECTS.filter(e => !e.mode || e.mode === ext.mode);
+  const effect = pool[Math.floor(nextRandom(state) * pool.length)];
+  const index = Math.max(0, WHEEL_EFFECTS.findIndex(e => e.id === effect.id));
+  ext.wheelPending = { playerId: player.id, effect, index, at: Date.now() };
+  ext.wheelResult = null;
+  log(state, `🌈 ${player.name} 啟動命運輪盤，結果即將揭曉。`);
+  return { pending: true, effect, index, playerId: player.id, at: ext.wheelPending.at };
+}
+
+function extResolveWheel(state, payload = {}) {
+  const ext = state.ext;
+  const pending = ext?.wheelPending;
+  if (!pending) return null;
+  if (payload.at && Number(payload.at) !== Number(pending.at)) return null;
+  const player = state.players.find(p => p.id === (payload.playerId || pending.playerId));
+  ext.wheelPending = null;
+  if (!player) return null;
+  const effect = pending.effect;
+  const text = extApplyWheel(state, player, effect);
+  ext.wheelResult = { effect, text, playerId: player.id, at: Date.now() };
+  log(state, `🌈 命運輪盤：${effect.icon} ${effect.name}｜${text}`);
+  extCheckBankruptcy(state, player);
+  extCheckWin(state);
+  return { effect, text, playerId: player.id, at: ext.wheelResult.at };
+}
+
+function extSpinWheel(state, player) {
+  const prepared = extPrepareWheel(state, player);
+  const resolved = extResolveWheel(state, { playerId: prepared.playerId, at: prepared.at });
+  return { effect: resolved.effect, text: resolved.text };
+}
+
+function extApplyWheel(state, player, effect) {
+  const ext = state.ext;
+  const others = extTargets(state, player.id);
+  switch (effect.id) {
+    case 'stealStar': {
+      const holders = others.filter(p => p.stars > 0);
+      if (!holders.length) return '場上沒有人持有星星，效果落空。';
+      const target = holders[Math.floor(nextRandom(state) * holders.length)];
+      target.stars -= 1; player.stars += 1;
+      extSyncStarBlade(state, target, '星星被偷走');
+      extSyncStarBlade(state, player);
+      return `從 ${target.name} 偷走 1 顆星。`;
+    }
+    case 'earlyDoom':
+      extTriggerDoom(state, true);
+      return '毀滅日提前降臨！';
+    case 'windfall':
+      addCash(state, player, 5000);
+      return '天降 5,000 總資產。';
+    case 'halve': {
+      const loss = Math.floor(Math.max(0, player.cash) / 2);
+      const prev = ext.noInflation; ext.noInflation = true;
+      addCash(state, player, -loss);
+      ext.noInflation = prev;
+      return `總資產腰斬，損失 ${extMoney(loss)}。`;
+    }
+    case 'supply': {
+      let n = 0;
+      for (let i = 0; i < 2; i++) if (drawItem(state, player)) n += 1;
+      return `抽到 ${n} 個道具${n < 2 ? '（道具欄已滿）' : ''}。`;
+    }
+    case 'darkweb': {
+      const pool = MYTHIC_ITEMS.filter(x => !x.hidden && (!x.mode || x.mode === ext.mode) && !extHasMythic(player, x.id));
+      if (!pool.length) return '暗網沒有新的神話道具可賣。';
+      const item = pool[Math.floor(nextRandom(state) * pool.length)];
+      if (!extAddMythic(state, player, item.id)) return '道具欄已滿（3 格），暗網商品無法帶走。';
+      return `取得隱藏神話道具「${item.name}」。`;
+    }
+    case 'overnight':
+      addCash(state, player, 2000);
+      return '一夜暴富，獲得 2,000 總資產。';
+    case 'haunt': {
+      if (!others.length) return '沒有其他玩家可纏身。';
+      const target = others[Math.floor(nextRandom(state) * others.length)];
+      const effects = [];
+      engineHooks.ghostStrike(state, target, effects);
+      return `罷工幽靈纏上 ${target.name}。`;
+    }
+    case 'discountStar': {
+      if (player.cash < 500) return '總資產不足 500，特價星失效。';
+      const prev = ext.noInflation; ext.noInflation = true;
+      addCash(state, player, -500);
+      ext.noInflation = prev;
+      player.stars += 1;
+      extSyncStarBlade(state, player);
+      return '以 500 買下 1 顆特價星（非起始格交易，不會讓星價上漲）。';
+    }
+    case 'redistribute': {
+      const richest = [...state.players].filter(p => !p.ext?.eliminated).sort((a, b) => b.cash - a.cash)[0];
+      if (!richest || richest.id === player.id) return '自己就是第一名，效果無效。';
+      const tmp = player.cash; player.cash = richest.cash; richest.cash = tmp;
+      return `與首富 ${richest.name} 交換了總資產。`;
+    }
+    case 'robinHood': {
+      const poorest = [...state.players].filter(p => !p.ext?.eliminated).sort((a, b) => a.cash - b.cash)[0];
+      if (!poorest || poorest.id === player.id) return '自己就是最後一名，效果無效。';
+      const tmp = player.cash; player.cash = poorest.cash; poorest.cash = tmp;
+      return `與最後一名 ${poorest.name} 交換了總資產。`;
+    }
+    case 'sucker': {
+      if (player.stars <= 0) return '自己沒有星星，無法送出。';
+      const candidates = state.players.filter(p => p.id !== player.id && !p.ext?.eliminated);
+      if (!candidates.length) return '沒有其他玩家。';
+      const lowest = Math.min(...candidates.map(p => p.stars));
+      const target = candidates.filter(p => p.stars === lowest)[0];
+      player.stars -= 1; target.stars += 1;
+      extSyncStarBlade(state, player, '把星星送走');
+      extSyncStarBlade(state, target);
+      return `含淚送給 ${target.name} 1 顆星。`;
+    }
+    default: return effect.desc;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 毀滅日
+// ---------------------------------------------------------------------------
+function extTriggerDoom(state, early = false) {
+  const ext = state.ext;
+  if (!ext || ext.mode !== 'evil') return;
+  const fee = ext.doomPrice;
+  // 依實際回合／擲骰順序逐一結算；不再依總資產高低重排。
+  const order = [...state.players].filter(p => !p.ext?.eliminated);
+  const executed = [], paid = [], resisted = [];
+  const executedIds = [], paidIds = [], resistedIds = [];
+  const sequence = [];
+  for (const p of order) {
+    if (p.cash >= fee) {
+      const prev = ext.noInflation; ext.noInflation = true;
+      addCash(state, p, -fee);
+      ext.noInflation = prev;
+      paid.push(p.name);
+      paidIds.push(p.id);
+      sequence.push({ playerId: p.id, name: p.name, outcome: 'paid', amount: fee });
+    } else if (extHasMythic(p, 'totem')) {
+      p.mythics = p.mythics.filter(x => x.id !== 'totem');
+      resisted.push(p.name);
+      resistedIds.push(p.id);
+      state.ext.totemEvent = { playerId: p.id, at: Date.now() };
+      sequence.push({ playerId: p.id, name: p.name, outcome: 'resisted', amount: 0 });
+      log(state, `🗿 ${p.name} 的不死圖騰擋下雷射處決！`);
+    } else {
+      p.ext.eliminated = true;
+      p.ext.ghostRole = true;
+      p.ext.aliveSeasons = p.ext.aliveSeasons || 0;
+      p.ext.oneStepLock = false;
+      p.ext.forceOneNext = false;
+      if (ext.domain?.ownerId === p.id) ext.domain = null;
+      p.stars = 0;
+      p.cash = 0;
+      p.items = [];
+      p.mythics = [];
+      p.specials = [];
+      executed.push(p.name);
+      executedIds.push(p.id);
+      sequence.push({ playerId: p.id, name: p.name, outcome: 'executed', amount: fee });
+      log(state, `💀 ${p.name} 付不出 ${extMoney(fee)} 保護費，被杜芬舒斯大樓雷射消滅，化為藍色罷工幽靈。`);
+    }
+  }
+  ext.doomPrice += Math.max(100, Number(ext.doomStep) || DOOM_STEP);
+  ext.doomCount += 1;
+  ext.doomEvent = { fee, paid, executed, resisted, paidIds, executedIds, resistedIds, sequence, early, at: Date.now() };
+  ext.lastEvent = { type: 'doom', ...ext.doomEvent };
+  log(state, `💀 毀滅日結束：${paid.length} 人付款、${resisted.length} 人抵抗、${executed.length} 人被處決。下次保護費 ${extMoney(ext.doomPrice)}。`);
+  extCheckWin(state);
+}
+
+// ---------------------------------------------------------------------------
+// 除錯工具
+// ---------------------------------------------------------------------------
+function extDebugGive(state, kind, id) {
+  if (!state.ext?.debug) throw Error('只有測試模式可以使用。');
+  const p = currentOf(state);
+  const isMythic = kind === 'mythic';
+  const meta = isMythic ? MYTHIC_BY_ID[id] : itemById(id);
+  if (!meta) throw Error(isMythic ? '神話道具不存在。' : '道具不存在。');
+  extPlayerExt(p);
+  const existing = isMythic ? extMythicEntry(p, id) : null;
+  if (existing && meta.charges) {
+    log(state, `🧪 測試模式：${p.name} 已持有「${meta.name}」，不補充使用次數。`);
+    return { gained: true, itemId: id, itemKind: kind };
+  }
+  if (!extHasItemSpace(p)) {
+    state.ext.replaceOffer = { playerId: p.id, itemId: id, itemKind: kind, price: 0, source: 'debug' };
+    log(state, `🧪 測試模式：${p.name} 的道具欄已滿，需選擇替換或丟棄「${meta.name}」。`);
+    return { pendingReplace: true, itemId: id, itemKind: kind };
+  }
+  if (isMythic) {
+    p.mythics.push({ id, charges: meta.charges || 1 });
+    if (id === 'bankai') p.ext.bankai = true;
+  } else {
+    p.items.push(id);
+  }
+  p.ext.itemsAcquired = (p.ext.itemsAcquired || 0) + 1;
+  extNoteItem(p, meta.name);
+  log(state, `🧪 測試模式：${p.name} 取得${isMythic ? '神話' : ''}道具「${meta.icon} ${meta.name}」。`);
+  return { gained: true, itemId: id, itemKind: kind };
+}
+function extDebugTeleport(state, playerId, tileIndex) {
+  if (!state.ext?.debug) throw Error('只有測試模式可以使用。');
+  const p = state.players.find(x => x.id === playerId);
+  const len = boardOf(state).length;
+  if (!p || !Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= len) throw Error('傳送目標無效。');
+  p.position = tileIndex;
+  applyCornerProgress(state,p,[tileIndex]);
+  log(state, `🧪 測試模式：${p.name} 被傳送到第 ${tileIndex} 格。`);
+  if (tileIndex === state.ghostPosition) {
+    const effects = [];
+    engineHooks.ghostStrike(state, p, effects);
+    state.lastRoll = { playerId: p.id, value: 0, from: tileIndex, path: [tileIndex], tileIndex, tileType: 'ghost', struck: true, effects };
+    state.phase = 'resolve';
+    log(state, `🧪 ${p.name} 被丟到幽靈身上，觸發罷工。`);
+    extCheckWin(state);
+  }
+}
+function extDebugGhostTo(state, tileIndex) {
+  if (!state.ext?.debug) throw Error('只有測試模式可以使用。');
+  if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= boardOf(state).length) throw Error('幽靈目標無效。');
+  state.ghostPosition = tileIndex;
+  state.ghostTrail = [];
+  log(state, `🧪 測試模式：幽靈被移動到第 ${tileIndex} 格。`);
+}
+function extDebugRollAgain(state) {
+  if (!state.ext?.debug) throw Error('只有測試模式可以使用。');
+  state.phase = 'roll';
+  state.pendingDecision = null;
+  log(state, '🧪 測試模式：解除回合限制，可以再擲一次。');
+}
+
+// 測試模式：不論目前卡在擲骰、決策或特殊格，都能強制結束目前回合。
+function extDebugEndTurn(state) {
+  if (!state.ext?.debug) throw Error('只有測試模式可以使用。');
+  if (!state || state.status !== 'playing') throw Error('遊戲已結束。');
+  if (state.phase === 'moving') throw Error('棋子移動中，請稍候再結束回合。');
+  const ext = state.ext;
+  state.pendingDecision = null;
+  state.pendingLanding = null;
+  state.lastRoll = null;
+  ext.starOffer = null;
+  ext.replaceOffer = null;
+  ext.forcedStarOffer = null;
+  ext.eventPrompt = null;
+  ext.auction = null;
+  ext.investOffer = null;
+  ext.taxChoice = null;
+  ext.insiderOffer = null;
+  ext.wheelPending = null;
+  ext.wheelResult = null;
+  state.phase = 'resolve';
+  log(state, '🧪 測試模式：強制結束目前玩家的回合。');
+  return endTurn(state);
+}
+
+// ---------------------------------------------------------------------------
+// 歷史與結算
+// ---------------------------------------------------------------------------
+function extRecordRound(state, round, { initial = false, final = false } = {}) {
+  if (!state.ext) return;
+  if (!Array.isArray(state.ext.history)) state.ext.history = [];
+  if (!initial && state.ext.history.some(h => h.round === round && !h.initial)) {
+    const existing = state.ext.history.find(h => h.round === round && !h.initial);
+    existing.players = state.players.map(p => ({
+      id: p.id, name: p.name, cash: p.cash, stars: p.stars,
+      alive: !p.ext?.eliminated, items: p.ext?.itemsAcquired || 0,
+      aliveSeasons: p.ext?.aliveSeasons || 0, roleId: p.roleId
+    }));
+    return;
+  }
+  state.ext.history.push({
+    round, initial, final,
+    players: state.players.map(p => ({
+      id: p.id, name: p.name, cash: p.cash, stars: p.stars,
+      alive: !p.ext?.eliminated, items: p.ext?.itemsAcquired || 0,
+      aliveSeasons: p.ext?.aliveSeasons || 0, roleId: p.roleId
+    }))
+  });
+}
+
+function extSettlementData(state) {
+  const history = [...(state.ext?.history || [])].sort((a, b) => a.round - b.round);
+  // 對局可能在季中結束（毀滅日、達標、連線中斷），補上目前狀態作為最後一個紀錄點，
+  // 讓結算圖表與生還名單反映真正的終局，而不是上一個季末快照。
+  const snapshot = {
+    round: state.round, initial: false, final: state.status !== 'playing',
+    players: state.players.map(p => ({
+      id: p.id, name: p.name, cash: p.cash, stars: p.stars,
+      alive: !p.ext?.eliminated, items: p.ext?.itemsAcquired || 0,
+      aliveSeasons: p.ext?.aliveSeasons || 0, roleId: p.roleId
+    }))
+  };
+  const signature = row => row?.players?.map(p => `${p.id}:${p.cash}:${p.stars}:${p.alive ? 1 : 0}:${p.items}:${p.aliveSeasons}`).join('|');
+  const last = history.at(-1);
+  if (!last || signature(last) !== signature(snapshot) || (snapshot.final && !last.final)) history.push(snapshot);
+  const rounds = history.map(h => h.round);
+  const players = state.players.map(p => ({ id: p.id, name: p.name, color: p.color, roleId: p.roleId, icon: extRoleOf(p).icon }));
+  const metric = key => players.map(p => ({
+    ...p,
+    values: history.map(h => {
+      const row = h.players.find(x => x.id === p.id);
+      return row ? Number(row[key]) || 0 : 0;
+    })
+  }));
+  const itemTotals = players.map(p => {
+    const live = state.players.find(x => x.id === p.id);
+    const gets = live?.ext?.itemGets && typeof live.ext.itemGets === 'object' ? live.ext.itemGets : {};
+    const details = Object.entries(gets).map(([name, count]) => ({ name, count: Number(count) || 0 })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-Hant'));
+    const row = [...history].reverse().map(h => h.players.find(x => x.id === p.id)).find(Boolean);
+    return { ...p, total: details.reduce((s, d) => s + d.count, 0) || row?.items || 0, details };
+  });
+  const survival = players.map(p => {
+    const last = [...history].reverse().map(h => h.players.find(x => x.id === p.id)).find(Boolean);
+    return { ...p, seasons: last?.aliveSeasons || 0, alive: last?.alive ?? true };
+  });
+  const allEliminated = state.players.length > 0 && state.players.every(p => p.ext?.eliminated);
+  return {
+    rounds, players,
+    cash: metric('cash'), stars: metric('stars'),
+    survival, itemTotals,
+    allEliminated,
+    winners: state.players.filter(p => state.winnerIds.includes(p.id)),
+    title: state.ext?.finishTitle || extMode(state).name,
+    subtitle: state.ext?.mode === 'evil' && allEliminated ? '無人生還' : '',
+    reason: state.resultReason,
+    mode: extMode(state)
+  };
+}
+
+function extReturnToLobbyState(state) {
+  if (!state?.ext) return;
+  state.ext.confirmed = [];
+}
+
+// 初始化時註冊所有掛鉤（檔尾確保已定義）
+engineHooks.extraStatusChips = extStatusChips;
 
 
 // Revision ordering is shared by every tab; page navigation stays local to each tab.
@@ -449,177 +3328,2518 @@ function isNewerGame(incoming,current){
 }
 
 
-// Pure helpers for multi-device rooms: codes, seat ownership, net-worth ranking and validation of guest messages.
-// Networking (PeerJS) lives in app.js; everything here is deterministic so it can be unit tested.
-// v2: rooms with the company lobby; pages from before it cannot join (and break) these rooms.
-const ROOM_PREFIX='econboard-v3-';
-const ROOM_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const ROOM_CODE_LENGTH=5;
-const MAX_PLAYERS=8,NAME_LENGTH=16;
-const GUEST_ACTIONS=['roll','draw-card','end-turn','hire','layoff','loan','repay','mark-bad','recover-bad'];
-const AMOUNT_ACTIONS=['hire','layoff','loan','repay','mark-bad','recover-bad'];
+// 多人房間 / PeerJS P2P 連線層
+const PartyNet = (() => {
+  const rid = () => (globalThis.crypto?.randomUUID?.() || `p-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
 
-function makeRoomCode(random=Math.random){
-  return Array.from({length:ROOM_CODE_LENGTH},()=>ROOM_ALPHABET[Math.floor(random()*ROOM_ALPHABET.length)]).join('');
-}
-function normalizeRoomCode(input){
-  const code=String(input??'').toUpperCase().replace(/[\s-]+/g,'');
-  return code.length===ROOM_CODE_LENGTH&&[...code].every(c=>ROOM_ALPHABET.includes(c))?code:null;
-}
-const roomPeerId=code=>`${ROOM_PREFIX}${code}`;
+  class Net {
+    constructor() {
+      this.code = '';
+      this.peerId = '';
+      this.hostId = '';
+      this.host = false;
+      this.name = '';
+      this.lobby = null;
+      this.active = false;
+      this.connectedPeers = new Set();
+      this.peers = new Map();
+      this.seen = new Set();
+      this._peer = null;
+      this.onLobby = null;
+      this.onStart = null;
+      this.onState = null;
+      this.onAction = null;
+      this.onEvent = null;
+      this.onReturnLobby = null;
+      this.onStatus = null;
+      this.onError = null;
+    }
 
-// Every player needs a device (the host included); play waits until all seats are taken,
-// then only the device seated at the current player may act.
-function emptySeats(seats,playerIds){return playerIds.filter(id=>!seats[id])}
-function canAct(seats,game,clientId){
-  if(!game||game.status!=='playing')return false;
-  if(emptySeats(seats,game.players.map(p=>p.id)).length)return false;
-  const player=game.players[game.turnIndex];
-  return !!player&&seats[player.id]===clientId;
-}
-// A seat is locked once taken: a device cannot switch seats itself; only the host can free one (releaseSeat).
-function claimSeat(seats,playerIds,playerId,clientId){
-  if(!playerIds.includes(playerId))throw Error('沒有這位玩家。');
-  const owner=seats[playerId];
-  if(owner===clientId)return seats;
-  if(owner)throw Error('這個座位已經有人坐了。');
-  if(Object.values(seats).includes(clientId))throw Error('你已經選好座位了；要換位子請房主收回。');
-  return {...seats,[playerId]:clientId};
-}
-function releaseSeat(seats,playerId){
-  const next={...seats};delete next[playerId];return next;
-}
+    get isHost() { return this.host; }
+    get isClient() { return this.active && !this.host; }
+    get myIndex() { return this.lobby?.players?.findIndex(p => p.peerId === this.peerId) ?? -1; }
+    get myPlayerId() { const i = this.myIndex; return i >= 0 ? `player-${i + 1}` : null; }
+    get myPlayer() { return this.lobby?.players?.[this.myIndex] || null; }
 
-// Before a game starts the room is a lobby: each device types a name and picks its own company,
-// a company belongs to one device only, and the host can start as soon as two devices have picked.
-function cleanPlayerName(raw){return String(raw??'').replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,NAME_LENGTH)}
-function pickRole(lobby,clientId,roleId,name,roleIds){
-  if(!roleIds.includes(roleId))throw Error('沒有這家企業。');
-  if(lobby.some(e=>e.roleId===roleId&&e.clientId!==clientId))throw Error('這家企業已經有人選了。');
-  const entry={clientId,name:cleanPlayerName(name),roleId},i=lobby.findIndex(e=>e.clientId===clientId);
-  if(i<0&&lobby.length>=MAX_PLAYERS)throw Error(`最多 ${MAX_PLAYERS} 位玩家。`);
-  return i<0?[...lobby,entry]:lobby.map((e,j)=>j===i?entry:e);
-}
-function leaveLobby(lobby,clientId){return lobby.filter(e=>e.clientId!==clientId)}
-// Players for createGame in pick order; blank names get a default and repeated names a number, since the engine needs unique names.
-function lobbyPlayers(lobby){
-  if(lobby.length<2)throw Error('至少要 2 位玩家選好企業才能開始。');
-  const used=new Set();
-  return lobby.map((e,i)=>{
-    const base=e.name||`玩家 ${i+1}`;let name=base,n=2;
-    while(used.has(name))name=`${base} ${n++}`;
-    used.add(name);
-    return {name,roleId:e.roleId};
-  });
-}
-// After createGame, each device is seated at the player made from its pick, so nobody has to choose a seat again.
-function lobbySeats(game,lobby){return Object.fromEntries(game.players.map((p,i)=>[p.id,lobby[i].clientId]))}
+    status(text) { try { this.onStatus?.(text); } catch { } }
+    error(text) { try { this.onError?.(text); } catch { } }
 
-// Net worth is computed in one place so a later rule (for example a player owning several companies) only changes this.
-function netWorthRanking(game){
-  const rows=game.players.map(player=>({player,netWorth:companyPosition(game,player.roleId).netWorth}));
-  return rows.map(row=>({...row,rank:1+rows.filter(r=>r.netWorth>row.netWorth).length})).sort((a,b)=>a.rank-b.rank);
-}
+    createRoom({ name, roleId = 'random' } = {}) {
+      this.leave(false);
+      const PeerConstructor = globalThis.Peer;
+      if (typeof PeerConstructor !== 'function') throw Error('PeerJS 尚未載入，請確認網路連線後重新整理。');
+      this.host = true;
+      this.active = true;
+      this.name = name || '房主';
+      this.lobby = {
+        code: '', hostId: '', status: 'waiting', mode: 'star', rounds: 10, target: 0,
+        starGoal: 3, doomEvery: 5, doomPrice: 1000, doomStep: 500, debug: false,
+        confirms: [], createdAt: Date.now(),
+        players: []
+      };
+      const peer = new PeerConstructor();
+      this._peer = peer;
+      peer.on('open', peerId => {
+        if (!this.active || this._peer !== peer) return;
+        this.peerId = peerId;
+        this.hostId = peerId;
+        this.code = peerId;
+        this.lobby.code = peerId;
+        this.lobby.hostId = peerId;
+        this.lobby.players = [{ peerId, name: this.name, roleId, host: true, connected: true }];
+        this.emitLobby();
+        this.broadcastLobby();
+        this.status(`房間 ${this.code} 已建立，等待玩家加入。`);
+      });
+      peer.on('connection', conn => this.wireConnection(conn));
+      peer.on('error', error => this.error(error?.message || 'PeerJS 連線錯誤'));
+      this.emitLobby();
+      this.status('正在建立 PeerJS 房間…');
+      return this.lobby;
+    }
 
-const safeId=v=>typeof v==='string'&&/^[\w-]{1,64}$/.test(v)?v:null;
-// Guest messages are untrusted: only a fixed set of shapes gets through.
-function parseGuestMessage(raw){
-  if(!raw||typeof raw!=='object')return null;
-  if(raw.t==='investment'){
-    if(typeof raw.turn!=='string'||raw.turn.length>100)return null;
-    if(raw.action==='buy'&&typeof raw.targetRole==='string'&&/^[a-z]{1,32}$/.test(raw.targetRole))return {t:'investment',action:'buy',targetRole:raw.targetRole,turn:raw.turn};
-    if(raw.action==='sell'&&Number.isSafeInteger(raw.cardId)&&raw.cardId>0)return {t:'investment',action:'sell',cardId:raw.cardId,turn:raw.turn};
+    joinRoom(code, name) {
+      this.leave(false);
+      this.code = String(code || '').trim();
+      if (!this.code || this.code.length > 128) throw Error('請輸入有效的 Peer ID。');
+      const PeerConstructor = globalThis.Peer;
+      if (typeof PeerConstructor !== 'function') throw Error('PeerJS 尚未載入，請確認網路連線後重新整理。');
+      this.host = false;
+      this.hostId = this.code;
+      this.active = true;
+      this.name = name || '玩家';
+      this.lobby = {
+        code: this.code, hostId: this.hostId, status: 'waiting', mode: 'star', rounds: 10, target: 0,
+        starGoal: 3, doomEvery: 5, doomPrice: 1000, doomStep: 500, debug: false,
+        confirms: [], players: [{ peerId: this.peerId, name: this.name, roleId: 'random', connected: true }]
+      };
+      const peer = new PeerConstructor();
+      this._peer = peer;
+      peer.on('open', peerId => {
+        if (!this.active || this._peer !== peer) return;
+        this.peerId = peerId;
+        this.lobby.players[0].peerId = peerId;
+        this.wireConnection(peer.connect(this.hostId));
+      });
+      peer.on('error', error => this.error(error?.message || 'PeerJS 連線錯誤'));
+      this.emitLobby();
+      this.status(`正在加入房間 ${this.code}…`);
+      return this.lobby;
+    }
+
+    leave(notify = true) {
+      this.active = false;
+      for (const rec of this.peers.values()) { try { rec.conn?.close(); } catch { } }
+      try { this._peer?.destroy(); } catch { }
+      this.peers.clear();
+      this.connectedPeers.clear();
+      this._peer = null;
+      this.host = false;
+      this.code = '';
+      this.hostId = '';
+      this.lobby = null;
+      this.seen.clear();
+      if (notify) this.emitLobby();
+    }
+
+    wireConnection(conn) {
+        if (!conn?.peer) return;
+        const peerId = conn.peer;
+        this.peers.set(peerId, { conn });
+        conn.on('open', () => {
+          if (!this.active) return;
+          this.connectedPeers.add(peerId);
+          if (this.host) {
+            const player = this.lobby?.players.find(entry => entry.peerId === peerId);
+            if (player) player.connected = true;
+            conn.send({ type: 'SYSTEM', message: '連線成功' });
+            this.broadcastLobby();
+            this.status(`${peerId} 已連線。`);
+          } else {
+            this.sendData({ t: 'hello', name: this.name }, this.hostId);
+            this.status('PeerJS 已連線。');
+          }
+        });
+        conn.on('data', data => {
+          let message = data;
+          if (typeof message === 'string') {
+            try { message = JSON.parse(message); } catch { return; }
+          }
+          if (message?.type === 'SYSTEM') {
+            console.log(message.message);
+            return;
+          }
+          this.handleData(message, peerId);
+        });
+        conn.on('close', () => {
+          this.connectedPeers.delete(peerId);
+          this.peers.delete(peerId);
+          const player = this.lobby?.players.find(entry => entry.peerId === peerId);
+          if (player) {
+            player.connected = false;
+            if (this.host) this.broadcastLobby();
+          }
+        });
+        conn.on('error', error => this.error(error?.message || 'PeerJS 資料連線錯誤'));
+    }
+
+    addPlayer(peerId, name) {
+      if (!this.host || !this.lobby) return;
+      let player = this.lobby.players.find(p => p.peerId === peerId);
+      if (!player) {
+        if (this.lobby.status !== 'waiting') { this.sendData({ t: 'error', text: '對局已開始，暫時無法加入。' }, peerId); return; }
+        player = { peerId, name, roleId: 'random', host: false, connected: false };
+        this.lobby.players.push(player);
+      } else if (name) player.name = name;
+      this.emitLobby();
+    }
+
+    setMode(mode) {
+      if (!this.host || !this.lobby) return;
+      this.lobby.mode = mode;
+      this.broadcastLobby();
+    }
+    setRounds(rounds) { if (!this.host || !this.lobby) return; this.lobby.rounds = Number(rounds) || 10; this.broadcastLobby(); }
+    setDebug(debug) { if (!this.host || !this.lobby) return; this.lobby.debug = Boolean(debug); this.broadcastLobby(); }
+    setTarget(target) { if (!this.host || !this.lobby) return; this.lobby.target = Number(target) || 0; this.broadcastLobby(); }
+    setStarGoal(goal) { if (!this.host || !this.lobby) return; this.lobby.starGoal = Math.max(1, Number(goal) || 3); this.broadcastLobby(); }
+    setDoomEvery(every) { if (!this.host || !this.lobby) return; this.lobby.doomEvery = Math.max(1, Number(every) || 5); this.broadcastLobby(); }
+    setDoomPrice(price) { if (!this.host || !this.lobby) return; this.lobby.doomPrice = Math.max(100, Number(price) || 1000); this.broadcastLobby(); }
+    setDoomStep(step) { if (!this.host || !this.lobby) return; this.lobby.doomStep = Math.max(100, Number(step) || 500); this.broadcastLobby(); }
+
+    selectRole(roleId) {
+      if (!this.active) return;
+      if (this.host) {
+        const p = this.myPlayer; if (p) { p.roleId = roleId; }
+        this.broadcastLobby();
+      } else if (this.hostId) {
+        this.sendData({ t: 'role', roleId }, this.hostId);
+      }
+    }
+
+    renameSelf(name) {
+      if (!this.active) return;
+      if (this.host) { const p = this.myPlayer; if (p) p.name = name; this.broadcastLobby(); }
+      else if (this.hostId) this.sendData({ t: 'rename', name }, this.hostId);
+    }
+
+    startGame() {
+      if (!this.host || !this.lobby) throw Error('只有房主可以開始對局。');
+      if (this.lobby.players.length < 2) throw Error('至少需要 2 位玩家。');
+      if (this.lobby.players.length > 8) throw Error('最多 8 位玩家。');
+      const fixed = this.lobby.players.filter(p => p.roleId !== 'random').map(p => p.roleId);
+      if (new Set(fixed).size !== fixed.length) throw Error('企業角色不可重複（未定新創集團除外）。');
+      this.lobby.status = 'playing';
+      this.lobby.confirms = [];
+      const config = {
+        seed: Date.now(),
+        players: this.lobby.players.map(p => ({ name: p.name, roleId: p.roleId })),
+        mode: this.lobby.mode,
+        rounds: this.lobby.rounds,
+        target: this.lobby.target,
+        starGoal: this.lobby.starGoal,
+        doomEvery: this.lobby.doomEvery,
+        doomPrice: this.lobby.doomPrice,
+        doomStep: this.lobby.doomStep,
+        debug: this.lobby.debug,
+        net: {
+          roomCode: this.code, hostId: this.hostId,
+          owners: Object.fromEntries(this.lobby.players.map((p, i) => [`player-${i + 1}`, p.peerId])),
+          peerNames: Object.fromEntries(this.lobby.players.map((p, i) => [p.peerId, p.name]))
+        }
+      };
+      this.broadcastData({ t: 'start', config });
+      this.broadcastLobby();
+      this.onStart?.(config);
+    }
+
+    publish(state) {
+      if (!this.active || !this.host || !state) return;
+      this.broadcastState(state);
+    }
+
+    sendAction(action) {
+      if (!this.active || this.host || !this.hostId || !action?.type) return false;
+      this.sendData({ t: 'action', action }, this.hostId);
+      return true;
+    }
+
+    broadcastState(game) {
+      if (!this.active || !this.host || !game) return;
+      this.broadcastData({ t: 'state', game });
+    }
+
+    broadcastEvent(event) {
+      if (!this.active || !this.host || !event?.type) return;
+      this.onEvent?.(event, this.peerId);
+      this.broadcastData({ t: 'event', event });
+    }
+
+    broadcastData(msg) {
+      this.sendData(msg, 'all');
+    }
+
+    sendData(msg, target = 'all') {
+      if (!this.active) return;
+      const packet = { ...msg, mid: rid(), fromPeer: this.peerId, at: Date.now() };
+      if (target === 'all') {
+        for (const [peerId, rec] of this.peers) {
+          if (peerId !== this.peerId && rec.conn?.open) { try { rec.conn.send(packet); } catch { } }
+        }
+      } else {
+        const rec = this.peers.get(target);
+        if (rec?.conn?.open) { try { rec.conn.send(packet); } catch { } }
+      }
+    }
+
+    _markSeen(mid) {
+      if (!mid) return false;
+      if (this.seen.has(mid)) return true;
+      this.seen.add(mid);
+      if (this.seen.size > 500) this.seen.delete(this.seen.values().next().value);
+      return false;
+    }
+
+    handleData(msg, fromPeer) {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.type === 'SYSTEM') { console.log(msg.message); return; }
+      if (msg.fromPeer === this.peerId) return;
+      if (this._markSeen(msg.mid)) return;
+      if (msg.t === 'lobby' && msg.lobby) {
+        this.lobby = msg.lobby;
+        if (msg.lobby.hostId) this.hostId = msg.lobby.hostId;
+        this.emitLobby();
+        return;
+      }
+      if (msg.t === 'hello') {
+        if (this.host) {
+          this.addPlayer(fromPeer, msg.name);
+          const p = this.lobby.players.find(x => x.peerId === fromPeer);
+          if (p) p.connected = true;
+          this.connectedPeers.add(fromPeer);
+          this.broadcastLobby();
+          this.sendData({ t: 'lobby', lobby: this.lobby }, fromPeer);
+        }
+        return;
+      }
+      if (msg.t === 'state' && msg.game) {
+        if (!this.host && fromPeer === this.hostId) this.onState?.(msg.game, fromPeer);
+        return;
+      }
+      if (msg.t === 'action' && this.host) {
+        this.onAction?.(msg.action, fromPeer);
+        return;
+      }
+      if (msg.t === 'event' && !this.host && fromPeer === this.hostId) {
+        this.onEvent?.(msg.event, fromPeer);
+        return;
+      }
+      if (msg.t === 'start' && msg.config) {
+        if (this.lobby) this.lobby.status = 'playing';
+        this.onStart?.(msg.config);
+        return;
+      }
+      if (msg.t === 'role' && this.host) {
+        const p = this.lobby.players.find(x => x.peerId === fromPeer);
+        if (p) { p.roleId = msg.roleId; this.broadcastLobby(); }
+        return;
+      }
+      if (msg.t === 'rename' && this.host) {
+        const p = this.lobby.players.find(x => x.peerId === fromPeer);
+        if (p && msg.name) { p.name = String(msg.name).slice(0, 16); this.broadcastLobby(); }
+        return;
+      }
+      if (msg.t === 'confirm' && this.host) {
+        this.confirmResult(msg.playerId || '');
+        return;
+      }
+      if (msg.t === 'confirm-update' && msg.lobby) {
+        this.lobby = msg.lobby; this.emitLobby(); return;
+      }
+      if (msg.t === 'return-lobby') {
+        if (this.lobby) this.lobby.status = 'waiting';
+        this.onReturnLobby?.(this.lobby);
+        return;
+      }
+      if (msg.t === 'error') { this.error(msg.text || '連線錯誤'); return; }
+    }
+
+    broadcastLobby() {
+      if (!this.lobby) return;
+      this.emitLobby();
+      this.broadcastData({ t: 'lobby', lobby: this.lobby });
+    }
+
+    emitLobby() {
+      try { this.onLobby?.(this.lobby); } catch (e) { console.error(e); }
+    }
+
+    confirmResult(playerId) {
+      if (!this.active) return { confirmed: 0, total: 0 };
+      if (!this.host) {
+        if (this.hostId) this.sendData({ t: 'confirm', playerId: playerId || this.myPlayerId }, this.hostId);
+        return null;
+      }
+      if (!this.lobby) return null;
+      if (playerId && !this.lobby.confirms.includes(playerId)) this.lobby.confirms.push(playerId);
+      const total = this.lobby.players.length;
+      const confirmed = this.lobby.players.filter((p, i) => this.lobby.confirms.includes(`player-${i + 1}`) || this.lobby.confirms.includes(p.peerId)).length;
+      this.lobby.confirmRatio = { confirmed, total };
+      if (confirmed >= total) {
+        this.lobby.status = 'waiting';
+        this.lobby.confirms = [];
+        this.lobby.confirmRatio = { confirmed: 0, total };
+        this.broadcastLobby();
+        this.broadcastData({ t: 'return-lobby' });
+        this.onReturnLobby?.(this.lobby);
+      } else {
+        this.broadcastLobby();
+      }
+      return this.lobby.confirmRatio;
+    }
+
+    // ---- 權限 -----------------------------------------------------------
+    canAct(state) {
+      if (!this.active || !state) return true;
+      const owners = state.net?.owners;
+      if (!owners) return true;
+      const active = state.players?.[state.turnIndex];
+      if (!active) return true;
+      const owner = owners[active.id];
+      return !owner || owner === this.peerId;
+    }
+
+    ownerName(state) {
+      const active = state?.players?.[state?.turnIndex];
+      const owner = state?.net?.owners?.[active?.id];
+      return state?.net?.peerNames?.[owner] || '';
+    }
+  }
+
+  return new Net();
+})();
+
+globalThis.PartyNet = PartyNet;
+
+
+// ============================================================================
+// 全域音效管理器（非破壞性新增）
+// 使用 WebAudio 即時合成，不需外部音檔；所有音效由 Hook 觸發。
+// ============================================================================
+const SoundManager = (() => {
+  let ctx = null;
+  let master = null;
+  let volume = 0.55;
+  let muted = false;
+  let unlocked = false;
+  const media = new Map();
+  try {
+    const saved = JSON.parse(localStorage.getItem('party-audio-v1') || '{}');
+    if (typeof saved.volume === 'number') volume = Math.max(0, Math.min(1, saved.volume));
+    muted = Boolean(saved.muted);
+  } catch { }
+
+  function ensure() {
+    if (!ctx) {
+      const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      master = ctx.createGain();
+      master.gain.value = muted ? 0 : volume;
+      master.connect(ctx.destination);
+    }
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
+    return ctx;
+  }
+
+  function save() {
+    try { localStorage.setItem('party-audio-v1', JSON.stringify({ volume, muted })); } catch { }
+    if (master) master.gain.value = muted ? 0 : volume;
+    for (const rec of media.values()) {
+      try { rec.el.volume = muted ? 0 : Math.max(0, Math.min(1, volume * (rec.gain || 1))); } catch { }
+    }
+    const el = document.querySelector('#volume-slider');
+    if (el) el.value = String(Math.round(volume * 100));
+    const btn = document.querySelector('#mute-btn');
+    if (btn) { btn.textContent = muted ? '🔇' : '🔊'; btn.title = muted ? '取消靜音' : '一鍵靜音'; }
+  }
+
+  function playMedia(name, src, { gain = 1 } = {}) {
+    if (muted) return;
+    try {
+      let rec = media.get(name);
+      if (!rec) {
+        const el = new Audio(src);
+        el.preload = 'auto';
+        rec = { el, gain };
+        media.set(name, rec);
+      }
+      rec.el.pause();
+      rec.el.currentTime = 0;
+      rec.el.volume = Math.max(0, Math.min(1, volume * gain));
+      const task = rec.el.play();
+      if (task?.catch) task.catch(() => { });
+    } catch { }
+  }
+
+  function tone({ freq = 440, endFreq = freq, dur = 0.12, type = 'sine', gain = 0.15, delay = 0, sweep = false }) {
+    const c = ensure();
+    if (!c || muted) return;
+    const t0 = c.currentTime + delay;
+    const osc = c.createOscillator();
+    const g = c.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(20, freq), t0);
+    if (sweep || endFreq !== freq) osc.frequency.exponentialRampToValueAtTime(Math.max(20, endFreq), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(master);
+    osc.start(t0); osc.stop(t0 + dur + 0.03);
+  }
+
+  function noise({ dur = 0.25, gain = 0.12, delay = 0, lowpass = 1200 }) {
+    const c = ensure();
+    if (!c || muted) return;
+    const t0 = c.currentTime + delay;
+    const buffer = c.createBuffer(1, Math.max(1, Math.floor(c.sampleRate * dur)), c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    const src = c.createBufferSource();
+    src.buffer = buffer;
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = lowpass;
+    const g = c.createGain();
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(filter); filter.connect(g); g.connect(master);
+    src.start(t0);
+  }
+
+  const sounds = {
+    click() { tone({ freq: 520, endFreq: 640, dur: 0.05, type: 'triangle', gain: 0.08 }); },
+    hover() { tone({ freq: 720, dur: 0.035, type: 'sine', gain: 0.035 }); },
+    dice() { for (let i = 0; i < 7; i++) tone({ freq: 220 + Math.random() * 300, dur: 0.055, type: 'square', gain: 0.045, delay: i * 0.07 }); },
+    move() { tone({ freq: 380, endFreq: 520, dur: 0.09, type: 'triangle', gain: 0.07 }); },
+    coin() { tone({ freq: 880, dur: 0.08, type: 'triangle', gain: 0.1 }); tone({ freq: 1320, dur: 0.12, type: 'triangle', gain: 0.08, delay: 0.07 }); },
+    marketBull() { [880, 1100, 1320].forEach((freq, i) => tone({ freq, dur: 0.16, type: 'sine', gain: 0.09, delay: i * 0.07 })); },
+    marketStable() { tone({ freq: 560, dur: 0.2, type: 'triangle', gain: 0.08 }); tone({ freq: 700, dur: 0.18, type: 'triangle', gain: 0.06, delay: 0.11 }); },
+    marketPonzi() { [360, 280, 190].forEach((freq, i) => tone({ freq, endFreq: freq * 0.82, dur: 0.22, type: 'triangle', gain: 0.09, delay: i * 0.08, sweep: true })); },
+    cashGain() { [720, 980, 1240, 1560].forEach((f, i) => tone({ freq: f, dur: 0.13, type: 'triangle', gain: 0.08, delay: i * 0.055 })); },
+    cashLoss() { [620, 470, 340, 240].forEach((f, i) => tone({ freq: f, dur: 0.16, type: 'sawtooth', gain: 0.055, delay: i * 0.07, sweep: true, endFreq: f * .72 })); noise({ dur: 0.32, gain: 0.03, lowpass: 900 }); },
+    magic() { [523, 659, 784, 1047, 1319].forEach((f, i) => tone({ freq: f, endFreq: f * 1.02, dur: 0.3, type: 'sine', gain: 0.075, delay: i * 0.045 })); tone({ freq: 1760, dur: 0.5, type: 'sine', gain: 0.035, delay: 0.18 }); noise({ dur: 0.35, gain: 0.025, lowpass: 5200 }); },
+    domain() { tone({ freq: 92, endFreq: 68, dur: 0.7, type: 'sawtooth', gain: 0.12, sweep: true }); tone({ freq: 430, endFreq: 260, dur: 0.5, type: 'triangle', gain: 0.07, delay: 0.05, sweep: true }); noise({ dur: 0.45, gain: 0.06, lowpass: 1600 }); },
+    witch() { playMedia('witch-factor', new URL('./witch_factor.mp3', document.baseURI).href, { gain: 1 }); tone({ freq: 300, endFreq: 110, dur: 0.9, type: 'sine', gain: 0.1, sweep: true }); noise({ dur: 0.8, gain: 0.05, lowpass: 900 }); },
+    endingStar() { [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone({ freq: f, dur: 0.45, type: 'triangle', gain: 0.1, delay: i * 0.12 })); noise({ dur: 1.2, gain: 0.02, lowpass: 7000 }); },
+    endingTycoon() { [262, 330, 392, 523, 659, 784].forEach((f, i) => tone({ freq: f, dur: 0.4, type: 'square', gain: 0.06, delay: i * 0.1 })); for (let i = 0; i < 8; i++) tone({ freq: 1200 + (i % 3) * 260, dur: 0.1, type: 'triangle', gain: 0.045, delay: 0.35 + i * 0.07 }); },
+    star() { [660, 880, 1100, 1320].forEach((f, i) => tone({ freq: f, dur: 0.18, type: 'sine', gain: 0.1, delay: i * 0.08 })); },
+    ghost() { tone({ freq: 310, endFreq: 90, dur: 0.65, type: 'sine', gain: 0.12, sweep: true }); noise({ dur: 0.5, gain: 0.05, lowpass: 700 }); },
+    doom() { tone({ freq: 55, endFreq: 30, dur: 1.4, type: 'sawtooth', gain: 0.18, sweep: true }); noise({ dur: 1.2, gain: 0.1, lowpass: 500 }); },
+    laser() { tone({ freq: 1400, endFreq: 80, dur: 1.0, type: 'sawtooth', gain: 0.15, sweep: true }); noise({ dur: 0.8, gain: 0.1, lowpass: 2400 }); },
+    explosion() { noise({ dur: 0.9, gain: 0.28, lowpass: 900 }); tone({ freq: 95, endFreq: 28, dur: 0.8, type: 'square', gain: 0.16, sweep: true }); },
+    inflation() { for (let i = 0; i < 5; i++) tone({ freq: 420 + i * 110, dur: 0.22, type: 'square', gain: 0.11, delay: i * 0.18 }); },
+    alarm() { for (let i = 0; i < 6; i++) tone({ freq: i % 2 ? 620 : 880, dur: 0.16, type: 'square', gain: 0.09, delay: i * 0.2 }); },
+    whoosh() { noise({ dur: 0.45, gain: 0.1, lowpass: 1800 }); tone({ freq: 180, endFreq: 700, dur: 0.4, type: 'sine', gain: 0.05, sweep: true }); },
+    wheel() { for (let i = 0; i < 16; i++) tone({ freq: 500 + (i % 4) * 70, dur: 0.05, type: 'triangle', gain: 0.05, delay: i * 0.09 }); },
+    freeze() { tone({ freq: 1600, endFreq: 2100, dur: 0.4, type: 'sine', gain: 0.08, sweep: true }); noise({ dur: 0.35, gain: 0.04, lowpass: 4000 }); },
+    frozen() { playMedia('frozen', new URL('./frozen.mp3', document.baseURI).href, { gain: 1 }); },
+    // 矢量傳送與幽靈專屬音效原本偏大，統一壓到約 45%，避免突然爆音。
+    swing() { playMedia('swing', new URL('./swing.mp3', document.baseURI).href, { gain: .45 }); },
+    totem() { playMedia('totem', new URL('./minecraft-totem-sound.mp3', document.baseURI).href, { gain: 1 }); },
+    ghostLaugh() { playMedia('king-boos-laugh', new URL('./king-boos-laugh.mp3', document.baseURI).href, { gain: .45 }); },
+    cuff() {
+      // 金屬鎖銬扣上：短促高頻金屬聲 + 兩段機械卡榫。
+      noise({ dur: 0.08, gain: 0.16, lowpass: 5600 });
+      tone({ freq: 2100, endFreq: 1250, dur: 0.07, type: 'square', gain: 0.1, sweep: true });
+      tone({ freq: 950, endFreq: 620, dur: 0.09, type: 'triangle', gain: 0.08, delay: 0.055, sweep: true });
+      noise({ dur: 0.1, gain: 0.12, lowpass: 3200, delay: 0.1 });
+      tone({ freq: 480, endFreq: 340, dur: 0.08, type: 'square', gain: 0.06, delay: 0.11, sweep: true });
+    },
+    paper() { noise({ dur: 0.36, gain: 0.12, lowpass: 3600 }); noise({ dur: 0.18, gain: 0.08, lowpass: 5200, delay: 0.09 }); tone({ freq: 240, endFreq: 170, dur: 0.22, type: 'triangle', gain: 0.04, sweep: true }); },
+    bankai() { noise({ dur: 0.7, gain: 0.16, lowpass: 2600 }); tone({ freq: 70, endFreq: 42, dur: 0.9, type: 'sawtooth', gain: 0.14, sweep: true }); tone({ freq: 1200, endFreq: 180, dur: 0.35, type: 'sawtooth', gain: 0.1, sweep: true, delay: 0.12 }); },
+    lightning() { noise({ dur: 0.22, gain: 0.2, lowpass: 5000 }); tone({ freq: 1900, endFreq: 140, dur: 0.25, type: 'sawtooth', gain: 0.12, sweep: true }); },
+    victory() { [523, 659, 784, 1047].forEach((f, i) => tone({ freq: f, dur: 0.4, type: 'triangle', gain: 0.12, delay: i * 0.16 })); },
+    error() { tone({ freq: 220, endFreq: 160, dur: 0.2, type: 'square', gain: 0.08, sweep: true }); },
+    slide() { tone({ freq: 300, endFreq: 900, dur: 0.35, type: 'sine', gain: 0.06, sweep: true }); }
+  };
+
+  function play(name) {
+    ensure();
+    const fn = sounds[name];
+    if (!fn) return;
+    try { fn(); } catch { }
+  }
+
+  function unlock() {
+    if (unlocked) return;
+    unlocked = true;
+    ensure();
+  }
+
+  function injectControls() {
+    const actions = document.querySelector('.top-actions');
+    if (!actions || document.querySelector('#volume-slider')) return;
+    const wrap = document.createElement('span');
+    wrap.className = 'audio-controls';
+    wrap.innerHTML = `<button id="mute-btn" class="quiet audio-btn" type="button" title="一鍵靜音">${muted ? '🔇' : '🔊'}</button><input id="volume-slider" class="volume-slider" type="range" min="0" max="100" value="${Math.round(volume * 100)}" aria-label="音量">`;
+    actions.prepend(wrap);
+    wrap.querySelector('#mute-btn').addEventListener('click', () => { muted = !muted; save(); play('click'); });
+    wrap.querySelector('#volume-slider').addEventListener('input', e => { volume = Number(e.target.value) / 100; if (volume > 0) muted = false; save(); });
+    wrap.querySelector('#volume-slider').addEventListener('change', () => play('click'));
+    save();
+  }
+
+  document.addEventListener('pointerdown', unlock, { once: true });
+  document.addEventListener('keydown', unlock, { once: true });
+  document.addEventListener('click', e => {
+    if (e.target.closest('button, [data-item-id], [data-tile-index], .tab, .lobby-role')) play('click');
+  }, true);
+  document.addEventListener('DOMContentLoaded', injectControls);
+  if (document.readyState !== 'loading') setTimeout(injectControls, 0);
+
+  return {
+    play, unlock, injectControls,
+    get volume() { return volume; },
+    get muted() { return muted; },
+    setVolume(v) { volume = Math.max(0, Math.min(1, Number(v))); save(); },
+    toggleMute() { muted = !muted; save(); return muted; }
+  };
+})();
+
+globalThis.SoundManager = SoundManager;
+
+
+// ============================================================================
+// 派對擴充 UI（動態掛載，不破壞原始 index.html 結構）
+// ============================================================================
+const PartyUI = (() => {
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const h = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const money = n => Math.round(Number(n) || 0).toLocaleString('zh-TW');
+  const colors = ['#0f9688', '#5979b0', '#ce9460', '#aa6b91', '#c55d5d', '#7e9541', '#348da5', '#7a60ad'];
+  const app = () => window.PartyApp;
+  const state = () => app()?.state || null;
+  const sound = n => { try { window.SoundManager?.play(n); } catch { } };
+  const shorten = (name, max = 6) => String(name || '').length > max ? `${String(name).slice(0, max)}...` : String(name || '');
+  const esc = h;
+
+  function localPlayerId() {
+    const net = window.PartyNet;
+    return net?.active ? net.myPlayerId : null;
+  }
+  function isLocalOwner(p, playerId) {
+    if (!p?.net || !window.PartyNet?.active) return true;
+    return Boolean(playerId) && localPlayerId() === playerId;
+  }
+  function specialOwnerId(p) {
+    const ext = p?.ext;
+    if (!ext) return null;
+    if (ext.auction) return ext.auction.currentId || null;
+    if (ext.replaceOffer) return ext.replaceOffer.playerId || null;
+    if (ext.starOffer) return ext.starOffer.playerId || null;
+    if (ext.investOffer) return ext.investOffer.playerId || null;
+    if (ext.taxChoice) return ext.taxChoice.playerId || null;
+    if (ext.insiderOffer) return ext.insiderOffer.playerId || null;
+    if (ext.eventPrompt) return ext.eventPrompt.playerId || null;
     return null;
   }
-  if(raw.t==='auction-bid'){return typeof raw.auctionId==='string'&&raw.auctionId.length<=150&&Number.isSafeInteger(raw.amount)&&raw.amount>=0?{t:'auction-bid',auctionId:raw.auctionId,amount:raw.amount}:null;}
-  if(raw.t==='hello'){const clientId=safeId(raw.clientId);return clientId?{t:'hello',clientId}:null}
-  if(raw.t==='claim'){const playerId=safeId(raw.playerId);return playerId?{t:'claim',playerId}:null}
-  if(raw.t==='pick'){const roleId=safeId(raw.roleId);return roleId&&(raw.name===undefined||typeof raw.name==='string')?{t:'pick',roleId,name:cleanPlayerName(raw.name)}:null}
-  if(raw.t==='unpick')return {t:'unpick'};
-  if(raw.t==='action'&&GUEST_ACTIONS.includes(raw.action)){
-    if(!AMOUNT_ACTIONS.includes(raw.action))return {t:'action',action:raw.action};
-    const amount=Number(raw.amount);
-    return Number.isFinite(amount)&&Math.abs(amount)<=1e9?{t:'action',action:raw.action,amount}:null;
+  function hasSpecialOffer(p) {
+    return Boolean(p?.ext?.auction || p?.ext?.replaceOffer || p?.ext?.starOffer || p?.ext?.investOffer || p?.ext?.taxChoice || p?.ext?.insiderOffer || p?.ext?.eventPrompt);
   }
-  return null;
-}
+  function canUseLocalAction(p) {
+    if (!p?.net || !window.PartyNet?.active) return true;
+    if (!window.PartyNet.canAct(p)) return false;
+    if (hasSpecialOffer(p)) return isLocalOwner(p, specialOwnerId(p));
+    return true;
+  }
+  function playerName(p, id) {
+    return p?.players?.find(x => x.id === id)?.name || '';
+  }
+
+  let modal = null;
+  let tilePick = null;
+  let debugSelected = null;
+  let lastEventKey = '';
+  let lastCornerSubsidyKey = '';
+  let lastInvestmentSettlementKey = '';
+  let investmentSoundTimers = [];
+  let lastFinalRound = null;
+  let lastFinishKey = '';
+  let lastWheelKey = '';
+  let lastIndulgenceKey = '';
+  let lastVectorKey = '';
+  let lastVectorPendingKey = '';
+  let vectorLockUntil = 0;
+  let vectorLockTimer = null;
+  let lastVictoryKey = '';
+  let ghostStrikeTimer = null;
+  let doomTimers = [];
+  let victoryTimer = null;
+  let lastBankaiKey = '';
+  let lastIceKey = '';
+  let lastBankruptKey = '';
+  let lastTotemKey = '';
+  let wheelTimers = [];
+  let openingTimer = [];
+  let finishTimer = null;
+  let endingTimer = null;
+  let replaceDropConfirm = false;
+  let settlementLockUntil = 0;
+  let eventPromptKey = '';
+  let decisionGateKey = '';
+  let decisionGateUntil = 0;
+  let decisionTimer = null;
+  let wheelResolving = false;
+  let wheelOpen = false;
+
+  // -------------------------------------------------------------------------
+  // 基礎掛載
+  // -------------------------------------------------------------------------
+  function ensureRoot() {
+    let root = $('#party-ext-root');
+    if (!root) {
+      root = document.createElement('div');
+      root.id = 'party-ext-root';
+      document.body.appendChild(root);
+    }
+    if (!$('#opening-overlay')) {
+      root.insertAdjacentHTML('beforeend', `
+        <div id="opening-overlay" class="ext-overlay opening-overlay" hidden></div>
+        <div id="event-flash" class="event-flash" hidden></div>
+        <div id="ice-overlay" class="fx-layer ice-overlay" hidden></div>
+        <div id="bankai-overlay" class="fx-layer bankai-overlay" hidden><div class="bankai-smoke"></div><strong class="bankai-title">卍解</strong></div>
+        <div id="totem-overlay" class="fx-layer totem-overlay" hidden><span class="totem-icon">🗿</span></div>
+        <div id="indulgence-overlay" class="fx-layer indulgence-overlay" hidden><div class="indulgence-banner">已使用贖罪券抵禦罪惡</div></div>
+        <div id="ghost-strike-overlay" class="fx-layer ghost-strike-overlay" hidden><div class="ghost-strike-ghost" aria-hidden="true">👻</div><div class="ghost-strike-copy"><strong>幽靈干擾</strong><small>罷工幽靈正在干擾企業經營</small></div></div>
+        <div id="doom-sequence" class="doom-sequence" hidden><div class="doom-sequence-title" role="status"></div><div class="doom-sequence-sub"></div></div>
+        <div id="victory-pending-banner" class="victory-pending-banner" hidden></div>
+        <div id="wheel-overlay" class="ext-overlay wheel-overlay" hidden></div>
+        <div id="ext-modal" class="ext-overlay ext-modal" hidden>
+          <div class="ext-modal-backdrop"></div>
+          <div class="ext-modal-card" role="dialog" aria-modal="true">
+            <button class="ext-modal-close" type="button" aria-label="關閉">×</button>
+            <p class="ext-kicker"></p>
+            <div class="ext-icon">✦</div>
+            <h2 class="ext-title"></h2>
+            <p class="ext-text"></p>
+            <div class="ext-body"></div>
+            <div class="ext-actions"></div>
+          </div>
+        </div>
+        <div id="party-lobby" class="ext-overlay lobby-overlay" hidden></div>
+        <div id="party-connect" class="ext-overlay connect-overlay" hidden></div>
+        <div id="settlement-overlay" class="ext-overlay settlement-overlay" hidden></div>
+        <div id="witch-overlay" class="witch-overlay" hidden><span class="witch-mark">🦠</span><div><strong>魔女因子 · 死亡回歸</strong><small>世界倒轉，全場狀態回溯至本次擲骰前</small></div></div>
+        <div id="ending-overlay" class="ending-overlay" hidden></div>
+      `);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 模式 / 測試 / 多人入口
+  // -------------------------------------------------------------------------
+  function setupFieldVisibility(box, mode, reset = false) {
+    const { GAME_MODES } = window.__partyData || {};
+    const meta = GAME_MODES?.[mode] || {};
+    const fields = mode === 'star' ? ['rounds', 'starGoal']
+      : mode === 'tycoon' ? ['rounds', 'target']
+        : mode === 'evil' ? ['rounds', 'doomEvery', 'doomPrice', 'doomStep']
+          : [];
+    box.querySelectorAll('[data-setup-field]').forEach(label => {
+      const key = label.dataset.setupField;
+      const visible = fields.includes(key);
+      label.classList.toggle('hidden', !visible);
+      const input = label.querySelector('input');
+      if (input) input.disabled = mode === 'random' || !visible;
+    });
+    const note = $('#setup-lock-note');
+    if (note) note.hidden = mode !== 'random';
+    if (!reset) return;
+    const set = (id, value) => { const el = $(id); if (el) el.value = value; };
+    set('#rounds-input', meta.defaultRounds || 10);
+    set('#star-goal-input', meta.starGoal || 3);
+    set('#target-input', meta.defaultTarget || 8000);
+    set('#doom-every-input', 5);
+    set('#doom-price-input', 1000);
+    set('#doom-step-input', 500);
+  }
+  function renderSetupExtras() {
+    const card = $('.setup-card');
+    if (!card) return;
+    let box = $('#ext-setup');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'ext-setup';
+      box.className = 'ext-setup';
+      const anchor = card.querySelector('.setup-options');
+      if (anchor) anchor.insertAdjacentElement('afterend', box);
+      else card.appendChild(box);
+    }
+    const { GAME_MODES } = window.__partyData || {};
+    const mode = state()?.ext?.mode || $('#mode-select')?.value || 'star';
+    const meta = GAME_MODES?.[mode] || { name: '企業之星', icon: '🌟', desc: '', defaultRounds: 10, defaultTarget: 0 };
+    box.innerHTML = `
+      <div class="ext-setup-head"><span>🎮 對局模式</span><small>建立對局時可選擇，隨機模式會抽出三種之一</small></div>
+      <div class="mode-picker" id="mode-select-wrap">
+        ${['star', 'tycoon', 'evil', 'random'].map(id => {
+          const m = GAME_MODES?.[id];
+          if (!m) return '';
+          return `<button type="button" class="mode-card ${id === mode ? 'active' : ''}" data-mode-id="${id}"><span>${m.icon}</span><strong>${h(m.name)}</strong><small>${h(m.desc)}</small></button>`;
+        }).join('')}
+      </div>
+      <input type="hidden" id="mode-select" value="${h(mode)}">
+      <div id="mode-desc" class="mode-desc">${h(meta.desc)}</div>
+      <div class="ext-option-row">
+        <label class="ext-target" data-setup-field="rounds">最多季數<input id="rounds-input" type="number" min="3" max="30" value="${meta.defaultRounds || 10}"></label>
+        <label class="ext-target" data-setup-field="starGoal">勝利星數<input id="star-goal-input" type="number" min="1" max="10" value="${meta.starGoal || 3}"></label>
+        <label class="ext-target" data-setup-field="target">總資產目標<input id="target-input" type="number" min="2000" step="500" value="${meta.defaultTarget || 8000}"></label>
+        <label class="ext-target" data-setup-field="doomEvery">保護費間隔（季）<input id="doom-every-input" type="number" min="1" max="30" value="5"></label>
+        <label class="ext-target" data-setup-field="doomPrice">初始保護費<input id="doom-price-input" type="number" min="100" step="100" value="1000"></label>
+        <label class="ext-target" data-setup-field="doomStep">保護費抬升價<input id="doom-step-input" type="number" min="100" step="100" value="500"></label>
+        <span id="setup-lock-note" class="ext-lock-note" hidden>🎲 隨機模式鎖定數值：企業之星 10 季／3 星；首富競爭 24 季／8,000；邪惡企業 20 季／首期 1,000／抬升 500。</span>
+        <label class="ext-check"><input id="debug-mode" type="checkbox"> 🧪 開啟測試（單機沙盒）</label>
+      </div>
+      <div class="multi-entry">
+        <div><strong>🌐 多人房間</strong><small>WebRTC 房間代碼大廳，支援 2–8 人</small></div>
+        <div class="multi-buttons"><button type="button" id="create-room-btn" class="secondary">建立房間</button><button type="button" id="join-room-btn" class="quiet">輸入代碼加入</button></div>
+      </div>
+      <p id="room-brief" class="room-brief"></p>
+    `;
+    setupFieldVisibility(box, mode, true);
+    box.querySelectorAll('[data-mode-id]').forEach(btn => btn.addEventListener('click', () => {
+      const id = btn.dataset.modeId;
+      const m = GAME_MODES[id];
+      $('#mode-select').value = id;
+      box.querySelectorAll('[data-mode-id]').forEach(b => b.classList.toggle('active', b.dataset.modeId === id));
+      $('#mode-desc').textContent = m.desc;
+      setupFieldVisibility(box, id, true);
+      sound('click');
+    }));
+    $('#create-room-btn').onclick = () => openConnect('create');
+    $('#join-room-btn').onclick = () => openConnect('join');
+    if (window.PartyNet?.active && window.PartyNet.lobby) {
+      $('#room-brief').textContent = `目前房間：${window.PartyNet.code} · ${window.PartyNet.lobby.players.length} 人`;
+    }
+  }
+
+  function openConnect(kind) {
+    const el = $('#party-connect');
+    if (!el) return;
+    const roles = window.__partyData?.LOBBY_ROLES || [];
+    const selfName = document.querySelector('[data-setup-name="0"]')?.value || '玩家 1';
+    el.innerHTML = `
+      <div class="ext-modal-backdrop"></div>
+      <div class="connect-card">
+        <button class="ext-modal-close" data-connect-close type="button">×</button>
+        <p class="ext-kicker">${kind === 'create' ? 'CREATE ROOM' : 'JOIN ROOM'}</p>
+        <h2>${kind === 'create' ? '建立連線房間' : '輸入房間代碼'}</h2>
+        <p>${kind === 'create' ? '產生 6 碼房間代碼，邀請 2–8 位玩家加入同一個大廳。' : '向房主取得 6 碼房間代碼，加入後在大廳選擇企業。'}</p>
+        <label>你的名稱<input id="connect-name" maxlength="16" value="${h(selfName)}"></label>
+        ${kind === 'create' ? `<label>你的企業<select id="connect-role">${roles.map(r => `<option value="${r.id}">${r.icon} ${h(r.name)}</option>`).join('')}</select></label>` : `<label>房間代碼<input id="connect-code" maxlength="128" placeholder="輸入 Peer ID"></label>`}
+        <p class="connect-status" id="connect-status"></p>
+        <div class="connect-actions">
+          <button class="secondary" data-connect-close type="button">取消</button>
+          <button class="primary" id="connect-go" type="button">${kind === 'create' ? '建立房間 →' : '加入房間 →'}</button>
+        </div>
+      </div>
+    `;
+    el.hidden = false;
+    el.dataset.kind = kind;
+    el.querySelectorAll('[data-connect-close]').forEach(b => b.onclick = () => { el.hidden = true; });
+    $('#connect-go').onclick = () => {
+      const name = $('#connect-name').value.trim() || '玩家';
+      try {
+        if (kind === 'create') {
+          window.PartyNet.createRoom({ name, roleId: $('#connect-role').value || 'random' });
+        } else {
+          const code = $('#connect-code').value.trim();
+          if (!code) throw Error('請輸入房間代碼。');
+          window.PartyNet.joinRoom(code, name);
+        }
+        el.hidden = true;
+        if (window.PartyNet.lobby) showLobby(window.PartyNet.lobby);
+      } catch (e) { $('#connect-status').textContent = e.message; sound('error'); }
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 大廳
+  // -------------------------------------------------------------------------
+  function showLobby(lobby) {
+    ensureRoot();
+    const el = $('#party-lobby');
+    if (!el) return;
+    if (!lobby) { clearTurnLock(); el.hidden = true; return; }
+    if (lobby.status === 'playing' && state()?.status === 'playing') { el.hidden = true; return; }
+    clearTurnLock();
+    const net = window.PartyNet;
+    const isHost = net?.isHost;
+    const modes = window.__partyData?.GAME_MODES || {};
+    const roles = window.__partyData?.LOBBY_ROLES || [];
+    const activeMode = lobby.mode || 'star';
+    const meta = modes[activeMode] || modes.star || {};
+    const allowed = activeMode === 'star' ? ['rounds', 'starGoal']
+      : activeMode === 'tycoon' ? ['rounds', 'target']
+        : activeMode === 'evil' ? ['rounds', 'doomEvery', 'doomPrice', 'doomStep']
+          : [];
+    const field = (key, id, label, value, extra = '') => {
+      const visible = allowed.includes(key);
+      return `<label data-lobby-field="${key}" class="${visible ? '' : 'hidden'}">${label}<input id="${id}" type="number" ${extra} value="${value}" ${isHost && visible ? '' : 'disabled'}></label>`;
+    };
+    el.innerHTML = `
+      <div class="ext-modal-backdrop"></div>
+      <div class="lobby-card">
+        <div class="lobby-top">
+          <div><p class="ext-kicker">MULTIPLAYER LOBBY · WebRTC</p><h2>派對大廳</h2><p class="lobby-code-line">房間代碼 <strong id="lobby-code">${h(lobby.code)}</strong><button class="quiet" id="copy-code" type="button">複製</button></p></div>
+          <button class="ext-modal-close" id="lobby-leave" type="button" title="離開">×</button>
+        </div>
+        <div class="lobby-grid">
+          <div class="lobby-players">
+            <div class="lobby-section-head"><span>玩家 ${lobby.players.length}/8</span><small>${net?.connectedPeers?.size || 1} 條連線</small></div>
+            ${lobby.players.map((p, i) => {
+              const isMe = p.peerId === net?.peerId;
+              const role = roles.find(r => r.id === p.roleId) || roles[0];
+              return `<div class="lobby-player ${p.host ? 'host' : ''} ${isMe ? 'me' : ''}">
+                <span class="lobby-avatar">${role?.icon || '🎲'}</span>
+                <div class="lobby-player-main"><strong>${h(p.name)}${p.host ? ' 👑' : ''}${isMe ? '（你）' : ''}</strong><small>${h(role?.name || '未定新創集團')}${p.connected === false ? ' · 連線中…' : ' · 已連線'}</small></div>
+                ${(isMe || isHost) ? `<select data-lobby-role="${i}" class="lobby-role-select" ${isMe || isHost ? '' : 'disabled'}>${roles.map(r => `<option value="${r.id}" ${r.id === p.roleId ? 'selected' : ''}>${r.icon} ${h(r.name)}</option>`).join('')}</select>` : `<span class="lobby-role">${h(role?.name || '')}</span>`}
+              </div>`;
+            }).join('')}
+          </div>
+          <div class="lobby-settings">
+            <div class="lobby-section-head"><span>對局設定</span><small>${isHost ? '房主可調整' : '由房主設定'}</small></div>
+            <label>模式
+              <select id="lobby-mode" ${isHost ? '' : 'disabled'}>${['star', 'tycoon', 'evil', 'random'].map(id => `<option value="${id}" ${lobby.mode === id ? 'selected' : ''}>${modes[id]?.icon || ''} ${h(modes[id]?.name || id)}</option>`).join('')}</select>
+            </label>
+            <div class="lobby-mode-desc" id="lobby-mode-desc">${h(meta.desc || '')}</div>
+            <div class="lobby-row">
+              ${field('rounds', 'lobby-rounds', '最多季數', lobby.rounds || meta.defaultRounds || 10, 'min="3" max="30"')}
+              ${field('starGoal', 'lobby-star-goal', '勝利星數', lobby.starGoal || meta.starGoal || 3, 'min="1" max="10"')}
+              ${field('target', 'lobby-target', '總資產目標', lobby.target || meta.defaultTarget || 8000, 'min="2000" step="500"')}
+              ${field('doomEvery', 'lobby-doom-every', '保護費間隔（季）', lobby.doomEvery || 5, 'min="1" max="30"')}
+              ${field('doomPrice', 'lobby-doom-price', '初始保護費', lobby.doomPrice || 1000, 'min="100" step="100"')}
+              ${field('doomStep', 'lobby-doom-step', '保護費抬升價', lobby.doomStep ?? 500, 'min="100" step="100"')}
+            </div>
+            <p class="lobby-lock-note" ${activeMode === 'random' ? '' : 'hidden'}>🎲 隨機模式鎖定數值：企業之星 10 季／3 星；首富競爭 24 季／8,000；邪惡企業 20 季／首期 1,000／抬升 500。</p>
+            <label class="ext-check"><input id="lobby-debug" type="checkbox" ${lobby.debug ? 'checked' : ''} ${isHost ? '' : 'disabled'}> 🧪 開啟測試</label>
+            <div class="lobby-hint">Tips：每人只能操作自己的回合；所有狀態（道具、星數、護盾、通膨）都會同步。</div>
+          </div>
+        </div>
+        <div class="lobby-footer">
+          <span id="lobby-status">${isHost ? (lobby.players.length < 2 ? '等待至少 1 位玩家加入…' : '全員到齊，可以開始！') : '等待房主開始對局…'}</span>
+          ${isHost ? `<button class="primary" id="lobby-start" type="button" ${lobby.players.length < 2 ? 'disabled' : ''}>開始對局 →</button>` : `<span class="waiting-dot">等待房主</span>`}
+        </div>
+      </div>
+    `;
+    el.hidden = false;
+    $('#copy-code').onclick = async () => {
+      try { await navigator.clipboard.writeText(lobby.code); $('#copy-code').textContent = '已複製'; setTimeout(() => { const b = $('#copy-code'); if (b) b.textContent = '複製'; }, 1500); } catch { }
+    };
+    $('#lobby-leave').onclick = () => { window.PartyNet.leave(); el.hidden = true; renderSetupExtras(); };
+    $('#lobby-mode').onchange = e => {
+      const id = e.target.value;
+      window.PartyNet.setMode(id);
+      const m = modes[id];
+      if (!m) return;
+      $('#lobby-mode-desc').textContent = m.desc;
+      // 切換模式時同步該模式的固定預設值（隨機模式由引擎鎖定）。
+      window.PartyNet.setRounds(m.defaultRounds || 10);
+      if (id === 'star') window.PartyNet.setStarGoal(m.starGoal || 3);
+      if (id === 'tycoon') window.PartyNet.setTarget(m.defaultTarget || 8000);
+      if (id === 'evil') { window.PartyNet.setDoomEvery(5); window.PartyNet.setDoomPrice(1000); window.PartyNet.setDoomStep(500); }
+    };
+    const bind = (id, fn) => { const node = $(id); if (node) node.onchange = e => fn(e.target.value); };
+    bind('#lobby-rounds', v => window.PartyNet.setRounds(v));
+    bind('#lobby-star-goal', v => window.PartyNet.setStarGoal(v));
+    bind('#lobby-target', v => window.PartyNet.setTarget(v));
+    bind('#lobby-doom-every', v => window.PartyNet.setDoomEvery(v));
+    bind('#lobby-doom-price', v => window.PartyNet.setDoomPrice(v));
+    bind('#lobby-doom-step', v => window.PartyNet.setDoomStep(v));
+    $('#lobby-debug').onchange = e => window.PartyNet.setDebug(e.target.checked);
+    $$('[data-lobby-role]').forEach(sel => sel.onchange = e => {
+      const idx = Number(sel.dataset.lobbyRole);
+      const p = lobby.players[idx];
+      if (!p) return;
+      if (isHost && p.peerId !== window.PartyNet.peerId) { p.roleId = e.target.value; window.PartyNet.broadcastLobby(); }
+      else window.PartyNet.selectRole(e.target.value);
+    });
+    const start = $('#lobby-start');
+    if (start) start.onclick = () => {
+      try { window.PartyNet.startGame(); } catch (e) { $('#lobby-status').textContent = e.message; sound('error'); }
+    };
+  }
+
+  function hideLobby() { const el = $('#party-lobby'); if (el) el.hidden = true; }
+
+  // -------------------------------------------------------------------------
+  // 開場 / 事件動畫
+  // -------------------------------------------------------------------------
+  function clearOpening() { openingTimer.forEach(t => clearTimeout(t)); openingTimer = []; }
+  function onGameStart(game, { fromLobby = false } = {}) {
+    hideLobby();
+    hideSettlement();
+    hideEnding();
+    clearTimeout(finishTimer);
+    finishTimer = null;
+    clearTimeout(endingTimer);
+    endingTimer = null;
+    wheelTimers.forEach(t => clearTimeout(t));
+    wheelTimers = [];
+    wheelResolving = false;
+    wheelOpen = false;
+    clearTimeout(decisionTimer);
+    decisionTimer = null;
+    decisionGateKey = '';
+    decisionGateUntil = 0;
+    eventPromptKey = '';
+    replaceDropConfirm = false;
+    settlementLockUntil = 0;
+    lastFinishKey = '';
+    lastEventKey = '';
+    lastCornerSubsidyKey = '';
+    lastInvestmentSettlementKey = '';
+    investmentSoundTimers.forEach(t => clearTimeout(t));
+    investmentSoundTimers = [];
+    lastWheelKey = '';
+    lastIndulgenceKey = '';
+    lastVectorKey = '';
+    lastVectorPendingKey = '';
+    vectorLockUntil = 0;
+    clearTimeout(vectorLockTimer);
+    vectorLockTimer = null;
+    document.body.classList.remove('vector-locking');
+    lastVictoryKey = '';
+    clearTimeout(ghostStrikeTimer);
+    ghostStrikeTimer = null;
+    clearTimeout(victoryTimer);
+    victoryTimer = null;
+    doomTimers.forEach(t => clearTimeout(t));
+    doomTimers = [];
+    lastBankaiKey = '';
+    lastIceKey = '';
+    lastBankruptKey = '';
+    lastTotemKey = '';
+    lastFinalRound = null;
+    closeExtModal();
+    document.body.classList.remove('witch-negative', 'doom-resolving');
+    const witch = $('#witch-overlay'); if (witch) witch.hidden = true;
+    ['#ice-overlay', '#bankai-overlay', '#totem-overlay', '#indulgence-overlay', '#ghost-strike-overlay', '#wheel-overlay', '#doom-sequence', '#victory-pending-banner'].forEach(sel => {
+      const node = $(sel);
+      if (node) { node.hidden = true; node.className = node.className.replace(/\s*is-active/g, ''); }
+    });
+    const ghostFx = $('#ghost-strike-overlay');
+    if (ghostFx) ghostFx.className = 'fx-layer ghost-strike-overlay';
+    if (!game || game.ext?.debug) return;
+    const meta = window.__partyData?.GAME_MODES?.[game.ext?.mode] || { cup: '派對盃', win: '' };
+    const modeId = game.ext?.mode || 'star';
+    const targetStars = Number(game.ext?.targetStars ?? game.starGoal ?? 3) || 3;
+    const targetAssets = Number(game.ext?.targetAssets ?? game.ext?.target ?? 0);
+    const doomEvery = Number(game.ext?.doomEvery ?? 5) || 5;
+    const winText = modeId === 'star'
+      ? `先拿到 ${targetStars} 顆星；或季末星數最高。`
+      : modeId === 'tycoon'
+        ? `總資產率先達到 ${money(targetAssets)}；季末比較總資產。`
+        : modeId === 'evil'
+          ? `撐過每 ${doomEvery} 季的毀滅日，成為唯一倖存者。`
+          : meta.win;
+    const el = $('#opening-overlay');
+    if (!el) return;
+    clearOpening();
+    const players = game.players.map(p => p.name).join(' · ');
+    el.hidden = false;
+    el.innerHTML = `<div class="opening-scene">
+      <div class="opening-cup">${meta.icon || '🏆'}<span>${h(meta.cup || '派對盃')}</span></div>
+      <div class="opening-win"><small>勝利條件</small><strong>${h(winText || '')}</strong><em>${h(players)}</em></div>
+      <div class="opening-count" hidden><span class="pointer">👉</span><strong>3</strong></div>
+      <div class="opening-go" hidden><span>💥</span><strong>開賺吧！</strong></div>
+    </div>`;
+    sound('slide');
+    openingTimer.push(setTimeout(() => sound('star'), 300));
+    openingTimer.push(setTimeout(() => {
+      const count = el.querySelector('.opening-count'); if (count) count.hidden = false;
+      sound('dice');
+    }, 1400));
+    [3, 2, 1].forEach((n, i) => openingTimer.push(setTimeout(() => {
+      const strong = el.querySelector('.opening-count strong'); if (strong) strong.textContent = String(n);
+      sound('click');
+    }, 1500 + i * 650)));
+    openingTimer.push(setTimeout(() => {
+      el.querySelector('.opening-count')?.setAttribute('hidden', '');
+      const go = el.querySelector('.opening-go'); if (go) go.hidden = false;
+      sound('explosion');
+    }, 3600));
+    openingTimer.push(setTimeout(() => { el.hidden = true; el.innerHTML = ''; }, 4900));
+  }
+
+  function flashInflation(stage) {
+    const el = $('#event-flash');
+    if (!el) return;
+    el.className = 'event-flash inflation-flash';
+    el.hidden = false;
+    el.innerHTML = `<div class="flash-band"></div><div class="flash-content"><p>WARNING · 極端通膨</p><h2>通膨來襲！</h2><strong>資產變動 ×${stage}</strong><small>所有賺與扣的錢全面放大</small></div>`;
+    sound('inflation'); sound('alarm');
+    setTimeout(() => { el.hidden = true; el.className = 'event-flash'; }, 2600);
+  }
+
+  function doomSequenceItems(event) {
+    if (Array.isArray(event?.sequence) && event.sequence.length) return event.sequence;
+    // 舊存檔或舊事件沒有 sequence 時，至少依付款／抵抗／處決名單補回播放順序。
+    const players = state()?.players || [];
+    const nameOf = id => players.find(p => p.id === id)?.name || '玩家';
+    const items = [];
+    for (const id of event?.paidIds || []) items.push({ playerId: id, name: nameOf(id), outcome: 'paid', amount: event.fee });
+    for (const id of event?.resistedIds || []) items.push({ playerId: id, name: nameOf(id), outcome: 'resisted', amount: 0 });
+    for (const id of event?.executedIds || []) items.push({ playerId: id, name: nameOf(id), outcome: 'executed', amount: event.fee });
+    return items;
+  }
+
+  function doomToken(id) {
+    const board = $('#board');
+    if (!board) return null;
+    return board.querySelector(`.token[data-player-id="${String(id).replace(/"/g, '\\"')}"]`);
+  }
+
+  function prepareDoomTokens(seq) {
+    for (const item of seq) {
+      if (item.outcome !== 'executed') continue;
+      const token = doomToken(item.playerId);
+      if (!token) continue;
+      const player = state()?.players?.find(x => x.id === item.playerId);
+      // 先暫時顯示原本的企業棋子，等雷射命中後才轉為藍色罷工幽靈。
+      token.textContent = String(player?.name || item.name || '?').slice(0, 1);
+      token.style.background = colors[player?.color] || '#5f8ec4';
+      token.classList.remove('ghost-player');
+    }
+  }
+
+  function revealDoomGhost(id) {
+    const token = doomToken(id);
+    if (!token) return;
+    const player = state()?.players?.find(x => x.id === id);
+    token.textContent = '👻';
+    token.style.background = '#5f8ec4';
+    token.classList.add('ghost-player');
+    if (player) token.title = `${player.name}（罷工團幽靈）`;
+  }
+
+  function fireDoomLaser(id) {
+    const board = $('#board');
+    if (!board) return false;
+    const token = doomToken(id);
+    if (!token) return false;
+    const rect = board.getBoundingClientRect();
+    if (!rect.width) return false;
+    const tr = token.getBoundingClientRect();
+    const x = tr.left - rect.left + tr.width / 2;
+    const y = tr.top - rect.top + tr.height / 2;
+    // 雷射必須從邪惡企業圖示發射；找不到圖示時才退回看板上方中央。
+    const icon = document.querySelector('.evil-tower .tower-building') || document.querySelector('.evil-tower');
+    let ox = rect.width * .5, oy = 0;
+    if (icon) {
+      const ir = icon.getBoundingClientRect();
+      if (ir.width && ir.height) {
+        ox = ir.left - rect.left + ir.width / 2;
+        oy = ir.top - rect.top + ir.height / 2;
+      }
+    }
+    let layer = board.querySelector('.doom-laser-layer');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'doom-laser-layer';
+      board.appendChild(layer);
+    }
+    layer.innerHTML = `<svg viewBox="0 0 ${rect.width} ${rect.height}" preserveAspectRatio="none" aria-hidden="true"><line class="doom-beam-line" x1="${ox}" y1="${oy}" x2="${x}" y2="${y}"/><circle class="doom-impact" cx="${x}" cy="${y}" r="4"/></svg>`;
+    token.classList.add('doom-hit');
+    const revealTimer = setTimeout(() => revealDoomGhost(id), 300);
+    const hitTimer = setTimeout(() => token.classList.remove('doom-hit'), 620);
+    const layerTimer = setTimeout(() => layer.remove(), 500);
+    doomTimers.push(revealTimer, hitTimer, layerTimer);
+    return true;
+  }
+
+  function flashDoom(event) {
+    const el = $('#doom-sequence');
+    const title = el?.querySelector('.doom-sequence-title');
+    const sub = el?.querySelector('.doom-sequence-sub');
+    if (!el || !title) return 0;
+    doomTimers.forEach(t => clearTimeout(t));
+    doomTimers = [];
+    el.hidden = false;
+    el.className = 'doom-sequence is-active';
+    document.body.classList.add('doom-resolving');
+    const seq = doomSequenceItems(event);
+    prepareDoomTokens(seq);
+    const step = 1300; // 標題 1 秒 + 雷射／結果 0.3 秒
+    let offset = 0;
+    sound('doom');
+    if (!seq.length) {
+      title.textContent = '毀滅日結算';
+      sub.textContent = '全員驚險生還';
+      offset = 1200;
+    } else {
+      seq.forEach(item => {
+        const at = offset;
+        doomTimers.push(setTimeout(() => {
+          title.textContent = `正在向${item.name}收取保護費`;
+          sub.textContent = item.outcome === 'paid'
+            ? `支付保護費 ${money(event.fee)}...`
+            : item.outcome === 'resisted'
+              ? '不死圖騰正在抵抗雷射...'
+              : '無法支付，準備處決...';
+        }, at));
+        doomTimers.push(setTimeout(() => {
+          if (item.outcome === 'executed') {
+            sub.textContent = `${item.name} 被雷射消滅，化為罷工幽靈`;
+            if (fireDoomLaser(item.playerId)) {
+              sound('laser');
+              const boom = setTimeout(() => sound('explosion'), 120);
+              doomTimers.push(boom);
+            }
+          } else if (item.outcome === 'paid') {
+            sub.textContent = `${item.name} 已支付 ${money(event.fee)} 保護費`;
+            sound('cashLoss');
+          } else {
+            sub.textContent = `${item.name} 以不死圖騰擋下處決`;
+            sound('totem');
+          }
+        }, at + 1000));
+        offset += step;
+      });
+      doomTimers.push(setTimeout(() => {
+        title.textContent = '毀滅日結算完成';
+        sub.textContent = (event.executedIds || []).length
+          ? `${(event.executed || []).join('、')} 已轉為罷工幽靈`
+          : '全員驚險生還';
+      }, offset));
+      offset += 500;
+    }
+    const total = Math.max(offset, 1200);
+    settlementLockUntil = Date.now() + total + 250;
+    doomTimers.push(setTimeout(() => {
+      for (const item of seq) {
+        if (item.outcome === 'executed') revealDoomGhost(item.playerId);
+      }
+      el.hidden = true;
+      el.className = 'doom-sequence';
+      document.body.classList.remove('doom-resolving');
+      doomTimers = [];
+    }, total));
+    return total;
+  }
+
+  function flashDomainHit(event) {
+    const board = $('#board');
+    const token = board?.querySelector(`.token[data-player-id="${String(event.playerId || '').replace(/"/g, '\\"')}"]`);
+    if (token) {
+      token.classList.add('domain-hit');
+      const label = document.createElement('span');
+      label.className = 'domain-hit-label';
+      label.textContent = `🌐 -${money(event.amount || 100)}`;
+      token.closest('.tile')?.appendChild(label);
+      setTimeout(() => { token.classList.remove('domain-hit'); label.remove(); }, 1500);
+    }
+    sound('domain');
+  }
+
+  function flashWitch() {
+    const overlay = $('#witch-overlay');
+    if (overlay) {
+      overlay.hidden = false;
+      setTimeout(() => { overlay.hidden = true; }, 2600);
+    }
+    document.body.classList.add('witch-negative');
+    sound('witch');
+    setTimeout(() => document.body.classList.remove('witch-negative'), 2400);
+  }
+
+  function flashGhostInterference(event) {
+    const el = $('#ghost-strike-overlay');
+    if (!el) return;
+    clearTimeout(ghostStrikeTimer);
+    el.hidden = true;
+    // 強制重排以重新播放「放大 → 左飄 → 右出」的完整動畫。
+    void el.offsetWidth;
+    el.className = `fx-layer ghost-strike-overlay is-active${event?.enraged ? ' enraged' : ''}`;
+    el.hidden = false;
+    const strong = el.querySelector('.ghost-strike-copy strong');
+    const small = el.querySelector('.ghost-strike-copy small');
+    if (strong) strong.textContent = event?.enraged ? '憤怒幽靈干擾' : '幽靈干擾';
+    if (small) small.textContent = event?.enraged ? '驟死賽的憤怒幽靈發動罷工效果' : '罷工幽靈正在干擾企業經營';
+    sound('ghostLaugh');
+    ghostStrikeTimer = setTimeout(() => {
+      el.hidden = true;
+      el.className = 'fx-layer ghost-strike-overlay';
+    }, 2400);
+  }
+
+  function flashCornerSubsidy(event) {
+    const marker = document.createElement('div');
+    marker.className = 'corner-subsidy-pop';
+    marker.textContent = `領取補助金${Number(event?.amount) || 1000}`;
+    marker.setAttribute('role', 'status');
+    const anchor = [...document.querySelectorAll('#board .token[data-player-id], [data-player-card]')]
+      .find(node => node.dataset.playerId === event?.playerId || node.dataset.playerCard === event?.playerId);
+    const rect = anchor?.getBoundingClientRect();
+    const boardRect = $('#board')?.getBoundingClientRect();
+    marker.style.left = `${rect ? rect.left + rect.width / 2 : boardRect ? boardRect.left + boardRect.width / 2 : window.innerWidth / 2}px`;
+    marker.style.top = `${rect ? rect.top : boardRect ? boardRect.top + boardRect.height / 2 : window.innerHeight * .6}px`;
+    document.body.appendChild(marker);
+    marker.addEventListener('animationend', () => marker.remove(), { once: true });
+    setTimeout(() => marker.remove(), 1900);
+  }
+
+  function playSkillCue(event) {
+    const marker = document.createElement('div');
+    marker.className = 'skill-cue';
+    marker.textContent = event?.skillName || '技能發動';
+    marker.setAttribute('role', 'status');
+    marker.setAttribute('aria-live', 'polite');
+    const playerId = String(event?.playerId || '');
+    const anchors = [...document.querySelectorAll('#board .token[data-player-id], [data-player-card]')];
+    const anchor = anchors.find(node => node.dataset.playerId === playerId || node.dataset.playerCard === playerId);
+    const rect = anchor?.getBoundingClientRect();
+    const boardRect = $('#board')?.getBoundingClientRect();
+    marker.style.left = `${rect?.width ? rect.left + rect.width / 2 : boardRect ? boardRect.left + boardRect.width / 2 : window.innerWidth / 2}px`;
+    marker.style.top = `${rect?.height ? rect.top : boardRect ? boardRect.top + boardRect.height / 2 : window.innerHeight * 0.65}px`;
+    document.body.appendChild(marker);
+    sound('coin');
+    const remove = () => marker.remove();
+    marker.addEventListener('animationend', remove, { once: true });
+    setTimeout(remove, 1600);
+  }
+
+  function flashVictoryPending(event) {
+    const el = $('#victory-pending-banner');
+    if (!el) return;
+    const text = event?.text || `${(event?.names || []).join('、')}已達標，本季將進行結算`;
+    el.hidden = false;
+    el.className = 'victory-pending-banner is-active';
+    el.innerHTML = `<span>🏁</span><div><strong>${h(text)}</strong><small>本季結束後立即進行最終結算</small></div>`;
+    sound('star');
+    clearTimeout(victoryTimer);
+    victoryTimer = setTimeout(() => {
+      el.hidden = true;
+      el.className = 'victory-pending-banner';
+    }, 3400);
+  }
+
+  function hideEnding() {
+    const el = $('#ending-overlay');
+    if (el) { el.hidden = true; el.className = 'ending-overlay'; el.innerHTML = ''; }
+  }
+
+  function playEnding(p) {
+    if (!p || p.ext?.debug) return false;
+    if (p.resultReason === 'survivor' || p.resultReason === 'bankrupt') return false;
+    const mode = p.ext?.mode;
+    if (!['star', 'tycoon'].includes(mode)) return false;
+    const el = $('#ending-overlay');
+    if (!el) return false;
+    const winners = p.players.filter(x => p.winnerIds?.includes(x.id));
+    const names = winners.map(x => x.name).join('、') || '無人';
+    el.className = `ending-overlay ${mode}`;
+    el.hidden = false;
+    if (mode === 'star') {
+      el.innerHTML = `<div class="ending-scene star-scene">
+        <div class="ending-stars">${Array.from({ length: 18 }, (_, i) => `<i style="--i:${i}">★</i>`).join('')}</div>
+        <div class="ending-orbit"><span>🌟</span><span>⭐</span><span>✦</span></div>
+        <p class="ending-kicker">ENTERPRISE STAR · 星海加冕</p>
+        <h2>${h(names)}成為企業之星！</h2>
+        <strong>星海加冕 · 本季結算完成</strong>
+        <small>${winners.map(x => `${x.stars} 顆星 · ${money(x.cash)} 總資產`).join('　') || '星數最高者獲勝'}</small>
+      </div>`;
+      sound('endingStar');
+    } else {
+      el.innerHTML = `<div class="ending-scene tycoon-scene">
+        <div class="ending-coins">${Array.from({ length: 22 }, (_, i) => `<i style="--i:${i}">🪙</i>`).join('')}</div>
+        <div class="ending-chart">📈</div>
+        <p class="ending-kicker">TYCOON · 資產封頂</p>
+        <h2>${h(names)}成為世界首富！</h2>
+        <strong>資產封頂 · 本季結算完成</strong>
+        <small>${winners.map(x => `${money(x.cash)} 總資產`).join('　') || '總資產最高者獲勝'}</small>
+      </div>`;
+      sound('endingTycoon');
+    }
+    clearTimeout(endingTimer);
+    endingTimer = setTimeout(hideEnding, 3000);
+    return true;
+  }
+
+  function flashFinalSeason(round, maxRounds) {
+    const el = $('#event-flash');
+    if (!el) return;
+    el.className = 'event-flash final-flash';
+    el.hidden = false;
+    el.innerHTML = `<div class="final-scene"><span>⏰</span><div><p>FINAL SEASON</p><h2>最終季 · 第 ${round} / ${maxRounds} 季</h2><strong>季數上限後依模式規則排名</strong><small>把握最後一次擲骰與買星機會</small></div><span>🏁</span></div>`;
+    sound('alarm');
+    setTimeout(() => { el.hidden = true; el.className = 'event-flash'; }, 3200);
+  }
+
+  function flashSuddenDeath(event) {
+    const el = $('#event-flash');
+    if (!el) return;
+    el.className = 'event-flash sudden-flash';
+    el.hidden = false;
+    el.innerHTML = `<div class="sudden-scene"><span>⚡</span><div><p>SUDDEN DEATH</p><h2>驟死賽啟動</h2><strong>${h(event.winners?.join('、') || '')} 平手</strong><small>憤怒幽靈：紅色圖標 · 移動 1.5 倍 · 扣錢 2 倍</small></div><span>👻</span></div>`;
+    sound('lightning'); setTimeout(() => sound('ghost'), 300);
+    setTimeout(() => { el.hidden = true; el.className = 'event-flash'; }, 3000);
+  }
+
+  // -------------------------------------------------------------------------
+  // 專屬特效
+  // -------------------------------------------------------------------------
+  function resetFx(sel, extra = '') {
+    const el = $(sel);
+    if (!el) return null;
+    el.hidden = false;
+    el.className = `${extra || el.className.replace(/\s*is-active/g, '')} is-active`;
+    return el;
+  }
+  function hideFx(sel, baseClass) {
+    const el = $(sel);
+    if (!el) return;
+    el.hidden = true;
+    el.className = baseClass;
+  }
+
+  function flashFrozen(event) {
+    const el = resetFx('#ice-overlay', 'fx-layer ice-overlay');
+    if (!el) return;
+    sound('frozen');
+    const names = (event?.frozen || []).join('、');
+    if (names) app()?.notify(`❄️ ${names} 被寒冰蘑菇凍結！`);
+    setTimeout(() => hideFx('#ice-overlay', 'fx-layer ice-overlay'), 520);
+  }
+
+  function flashBankai() {
+    const el = resetFx('#bankai-overlay', 'fx-layer bankai-overlay');
+    if (!el) return;
+    sound('bankai');
+    setTimeout(() => sound('lightning'), 120);
+    setTimeout(() => hideFx('#bankai-overlay', 'fx-layer bankai-overlay'), 1250);
+  }
+
+  function flashTotem() {
+    const el = resetFx('#totem-overlay', 'fx-layer totem-overlay');
+    if (!el) return;
+    sound('totem');
+    setTimeout(() => hideFx('#totem-overlay', 'fx-layer totem-overlay'), 1500);
+  }
+
+  function flashIndulgence() {
+    const el = resetFx('#indulgence-overlay', 'fx-layer indulgence-overlay');
+    if (!el) return;
+    sound('paper');
+    setTimeout(() => hideFx('#indulgence-overlay', 'fx-layer indulgence-overlay'), 1400);
+  }
+
+  function flashBankrupt(event) {
+    const el = $('#event-flash');
+    if (!el) return;
+    const names = (event?.names || []).join('、') || '玩家';
+    el.className = 'event-flash bankrupt-flash';
+    el.hidden = false;
+    el.innerHTML = `<div class="bankrupt-scene"><span>👻</span><div><p>MARKET ELIMINATION</p><h2>負債淘汰</h2><strong>${h(names)} 化為罷工幽靈</strong><small>總資產跌破 −1,000，籌碼與道具全數清算。</small></div></div>`;
+    sound('ghost');
+    setTimeout(() => { el.hidden = true; el.className = 'event-flash'; }, 2600);
+  }
+
+  function tilePoint(index) {
+    const board = $('#board');
+    const tile = board?.querySelector(`[data-tile-index="${index}"]`);
+    if (!board || !tile) return null;
+    const rect = board.getBoundingClientRect();
+    const tr = tile.getBoundingClientRect();
+    return { x: tr.left - rect.left + tr.width / 2, y: tr.top - rect.top + tr.height / 2 };
+  }
+
+  const VECTOR_LOCK_MS = 520;
+
+  function releaseVectorLock(tokens = []) {
+    document.body.classList.remove('vector-locking');
+    tokens.forEach(token => {
+      token.classList.remove('vector-locked');
+      token.removeAttribute('data-vector-lock');
+    });
+  }
+
+  // 先讓受害者棋子停在原格並顯示鎖定準心，0.5 秒後才真正傳送與觸發格子效果。
+  function beginVectorLock(pending) {
+    if (!pending) return;
+    const ids = new Set((pending.candidates || []).map(c => c.playerId));
+    const tokens = $$('#board .token').filter(token => ids.has(token.dataset.playerId));
+    const names = (pending.candidates || []).map(c => c.name).filter(Boolean).join('、') || '目標';
+    const expectedAt = String(pending.at);
+    releaseVectorLock($$('#board .token.vector-locked'));
+    clearTimeout(vectorLockTimer);
+    vectorLockUntil = Date.now() + VECTOR_LOCK_MS;
+    document.body.classList.add('vector-locking');
+    tokens.forEach(token => {
+      token.classList.add('vector-locked');
+      token.dataset.vectorLock = '1';
+    });
+    app()?.notify?.(`🎯 矢量操作鎖定 ${names}！`);
+    vectorLockTimer = setTimeout(() => {
+      vectorLockTimer = null;
+      const current = state();
+      const active = current?.ext?.vectorPending;
+      if (!active || String(active.at) !== expectedAt) {
+        vectorLockUntil = 0;
+        releaseVectorLock(tokens);
+        return;
+      }
+      const before = app()?.cashSnapshot?.();
+      let event = null;
+      try {
+        event = window.__partyEngine?.extResolveVectorPending?.(current) || null;
+      } catch (err) {
+        console.error(err);
+        app()?.notify?.('矢量操作傳送結算失敗。');
+      }
+      vectorLockUntil = 0;
+      releaseVectorLock(tokens);
+      app()?.save?.();
+      app()?.render?.();
+      if (event && before) app()?.animateCashChanges?.(before);
+    }, VECTOR_LOCK_MS);
+  }
+
+  function flashVector(event) {
+    const board = $('#board');
+    if (!board || !event) return;
+    const hits = Array.isArray(event.hits) && event.hits.length
+      ? event.hits
+      : [{ playerId: event.playerId, from: event.from, to: event.to }];
+    const tiles = [];
+    for (const hit of hits) {
+      if (Number.isInteger(hit.from)) tiles.push(hit.from);
+      if (Number.isInteger(hit.to)) tiles.push(hit.to);
+    }
+    const points = [...new Set(tiles)].map(tilePoint).filter(Boolean);
+    if (!points.length) return;
+    board.querySelectorAll('.vector-smoke').forEach(n => n.remove());
+    points.forEach((pt, i) => {
+      const puff = document.createElement('span');
+      puff.className = 'vector-smoke';
+      puff.style.left = `${pt.x}px`;
+      puff.style.top = `${pt.y}px`;
+      puff.style.animationDelay = `${i * .08}s`;
+      puff.innerHTML = '<i></i><i></i><i></i>';
+      board.appendChild(puff);
+      setTimeout(() => puff.remove(), 1000);
+    });
+    sound('swing');
+    const names = hits.map(hit => hit.name || state()?.players?.find(x => x.id === hit.playerId)?.name || '玩家');
+    const destination = event.to ?? hits[0]?.to;
+    app()?.notify(hits.length > 1
+      ? `⬆️ 矢量操作：${names.join('、')} 被傳送到第 ${destination} 格！`
+      : `⬆️ ${names[0] || '玩家'} 被矢量操作傳送到第 ${destination} 格！`);
+  }
+
+  function eventSound(event) {
+    const kind = event?.kind;
+    const amount = Number(event?.amount) || 0;
+    if (kind === 'selfEnergy') return 'magic';
+    if (kind === 'allEnergy') return 'ghost';
+    return amount >= 0 ? 'coin' : 'cashLoss';
+  }
+
+  function eventPromptKeyOf(p) {
+    const ev = p?.ext?.eventPrompt;
+    return ev ? `${ev.playerId}:${ev.at}:${ev.eventId}` : '';
+  }
+
+  function openEventPrompt(p) {
+    const ev = p?.ext?.eventPrompt;
+    if (!ev) return;
+    if (!isLocalOwner(p, ev.playerId)) return;
+    const key = eventPromptKeyOf(p);
+    if (modal === 'event' && eventPromptKey === key) return;
+    eventPromptKey = key;
+    modal = 'event';
+    const amount = Number(ev.amount) || 0;
+    const energyEvent = ev.kind === 'allEnergy' || ev.kind === 'selfEnergy';
+    const amountText = amount ? `${amount > 0 ? '+' : ''}${energyEvent ? `${amount} 技能點` : `${money(amount)} 總資產`}` : '';
+    updateExtModal({
+      kicker: `EVENT TILE · 第 ${p.round} 季`, icon: ev.icon || '❓', title: ev.name || '突發事件', type: 'event',
+      text: ev.text || '市場上突然出現一則消息，影響所有企業。',
+      body: `<div class="event-prompt-box">
+        <span class="event-prompt-icon">${ev.icon || '❓'}</span>
+        <div><small>觸發事件</small><strong>${h(ev.name || '突發事件')}</strong><p>${h(ev.text || '')}</p></div>
+        ${amountText ? `<em class="${amount > 0 ? 'good' : 'bad'}">${h(amountText)}</em>` : ''}
+      </div>`,
+      actions: `<button class="primary" data-event-ok="1" type="button">確認事件</button>`
+    });
+    sound(eventSound(ev));
+  }
+
+  // -------------------------------------------------------------------------
+  // 擴充 Modal
+  // -------------------------------------------------------------------------
+  function openExtModal({ kicker = '', icon = '✦', title = '', text = '', body = '', actions = '', type = 'info' }) {
+    ensureRoot();
+    const el = $('#ext-modal');
+    if (!el) return;
+    el.hidden = false;
+    el.querySelector('.ext-kicker').textContent = kicker;
+    el.querySelector('.ext-icon').textContent = icon;
+    el.querySelector('.ext-title').textContent = title;
+    el.querySelector('.ext-text').textContent = text;
+    el.querySelector('.ext-body').innerHTML = body;
+    el.querySelector('.ext-actions').innerHTML = actions;
+    el.dataset.type = type;
+    sound('slide');
+    el.querySelector('.ext-modal-close').onclick = () => { if (['auction', 'decision', 'tax', 'invest', 'insider', 'star', 'replace', 'event'].includes(type)) { app()?.notify('請先完成目前事件。'); return; } closeExtModal(); };
+  }
+  function closeExtModal() { const el = $('#ext-modal'); if (el) el.hidden = true; modal = null; replaceDropConfirm = false; }
+  function updateExtModal(data) { openExtModal(data); }
+
+  function openStarOffer(p) {
+    const offer = p?.ext?.starOffer;
+    if (!offer) return;
+    const player = p.players.find(x => x.id === offer.playerId);
+    if (!player) return;
+    const price = Number(offer.price) || 0;
+    const goal = p.starGoal || 3;
+    const check = window.__partyEngine?.extCanBuyStar?.(p);
+    const canBuy = Boolean(check?.ok);
+    modal = 'star';
+    updateExtModal({
+      kicker: `STAR OFFER · 第 ${p.round} 季`, icon: '⭐', title: '出發格 · 購買星星', type: 'star',
+      text: offer.landed ? `${player.name} 停在出發格，可以購買 1 顆星。` : `${player.name} 經過出發格，可以購買 1 顆星。`,
+      body: `<div class="star-offer-box">
+        <div class="star-offer-glow">⭐</div>
+        <div class="star-offer-info"><span>目前星價</span><strong>${money(price)}</strong><small>${player.name} 目前 ${player.stars} / ${goal} 顆星 · 總資產 ${money(player.cash)}</small></div>
+        <p class="star-offer-note">每次有人買星，全場星價就會上漲。${canBuy ? '' : `（${check?.reason || (player.cash < price ? '總資產不足' : '目前無法購買')}）`}</p>
+      </div>`,
+      actions: `<button class="secondary" data-star-offer="skip" type="button">這次不買</button><button class="primary" data-star-offer="buy" type="button" ${canBuy ? '' : 'disabled'}>⭐ 買下星星 · ${money(price)}</button>`
+    });
+  }
+
+  function openReplaceOffer(p) {
+    const offer = p?.ext?.replaceOffer;
+    if (!offer) return;
+    const player = p.players.find(x => x.id === offer.playerId);
+    if (!player) return;
+    const { ITEMS = [], MYTHIC_BY_ID = {} } = window.__partyData || {};
+    const offerKind = offer.itemKind === 'normal' ? 'normal' : 'mythic';
+    const meta = offerKind === 'normal'
+      ? (ITEMS.find(x => x.id === offer.itemId) || { name: offer.itemId, icon: '🎁', desc: '' })
+      : (MYTHIC_BY_ID[offer.itemId] || { name: offer.itemId, icon: '❓', desc: '' });
+    const sourceText = offer.source === 'debug'
+      ? '透過測試工具加入新道具，但道具欄已滿（3/3）。'
+      : `以 ${money(offer.price || 0)} 標下新道具，但道具欄已滿（3/3）。`;
+    const slots = [
+      ...(player.mythics || []).map((entry, index) => {
+        const m = MYTHIC_BY_ID[entry.id] || { name: entry.id, icon: '🗿', desc: '' };
+        return { kind: 'mythic', index, name: m.name, icon: m.icon, desc: m.desc };
+      }),
+      ...(player.items || []).map((id, index) => {
+        const m = ITEMS.find(x => x.id === id) || { name: id, icon: '🎁', desc: '' };
+        return { kind: 'normal', index, name: m.name, icon: m.icon, desc: m.desc };
+      })
+    ];
+    modal = 'replace';
+    const confirm = replaceDropConfirm;
+    updateExtModal({
+      kicker: offer.source === 'debug' ? `DEBUG · 第 ${p.round} 季` : `BLACK MARKET · 第 ${p.round} 季`, icon: '🛒', title: confirm ? '確認丟棄新道具？' : '背包已滿 · 替換或丟棄', type: 'replace',
+      text: confirm ? '丟棄後無法復原，這件剛獲得的新道具會直接消失。' : `${player.name} ${sourceText}請選擇替換或丟棄新道具。`,
+      body: confirm
+        ? `<div class="replace-warning"><span>⚠️</span><div><strong>${h(meta.icon)} ${h(meta.name)}</strong><small>這件新道具將被永久丟棄，已支付的成本不會退還。</small></div></div>`
+        : `<div class="replace-box">
+            <div class="replace-new"><span class="replace-item-icon">${meta.icon}</span><div><small>剛獲得的新道具</small><strong>${h(meta.name)}</strong><p>${h(meta.desc || '')}</p></div></div>
+            <div class="replace-grid">
+              ${slots.map(s => `<button type="button" class="replace-slot ${s.kind}" data-replace-kind="${s.kind}" data-replace-index="${s.index}"><span>${s.icon}</span><div><strong>${h(s.name)}</strong><small>${s.kind === 'mythic' ? '神話道具' : '普通道具'} · 點擊替換</small></div></button>`).join('')}
+            </div>
+            <p class="replace-note">選擇一個現有道具替換，或丟棄剛獲得的新道具（需二次確認）。</p>
+          </div>`,
+      actions: confirm
+        ? `<button class="secondary" data-replace-back type="button">返回</button><button class="danger" data-replace-drop-confirm type="button">確定丟棄新道具</button>`
+        : `<button class="danger" data-replace-drop type="button">丟棄新道具</button>`
+    });
+  }
+
+  function openSpecialModal(s) {
+    const p = state();
+    if (!p) return;
+    const owner = specialOwnerId(p);
+    if (owner && !isLocalOwner(p, owner)) return;
+    modal = s.type;
+    const nameOf = id => p.players.find(x => x.id === id)?.name || '';
+    if (s.type === 'auction') {
+      const a = p.ext.auction;
+      const cur = s.current || window.__partyEngine?.extAuctionCurrent?.(p);
+      const myTurn = isLocalOwner(p, cur?.id);
+      updateExtModal({
+        kicker: `BLACK MARKET · 第 ${p.round} 季`, icon: '🛒', title: '黑市拍賣', type: 'auction',
+        text: '隱藏的神話道具正在拍賣。每次抬價 250，最後一位出價者得標。',
+        body: `<div class="auction-box"><div class="auction-item">❓<span>隱藏神話道具</span></div><div class="auction-stats"><div><small>目前出價</small><strong>${money(a.highestBid || a.basePrice)}</strong></div><div><small>下次出價</small><strong>${money(a.currentPrice)}</strong></div><div><small>最高出價者</small><strong>${h(nameOf(a.highestBidder) || '尚無')}</strong></div><div><small>目前玩家持有</small><strong class="auction-cash ${Number(cur?.cash) < 0 ? 'negative' : ''}">${money(cur?.cash || 0)}</strong></div></div><p class="auction-turn">輪到 <b>${h(cur?.name || '')}</b> 決定${cur ? ` · 持有 ${money(cur.cash)} 總資產` : ''}</p></div>`,
+        actions: `<button class="secondary" data-auction="pass" ${myTurn ? '' : 'disabled'}>放棄</button><button class="primary" data-auction="bid" ${myTurn ? '' : 'disabled'}>出價 ${money(a.currentPrice)} ↑</button>`
+      });
+    } else if (s.type === 'invest') {
+      const offer = p.ext.investOffer;
+      const player = p.players.find(x => x.id === offer.playerId);
+      updateExtModal({
+        kicker: 'INVESTMENT · 股票憑證', icon: '📈', title: '投資機會', type: 'invest',
+        text: `${player?.name || ''} 可投入 50% 總資產，季末結算：大牛市 3 倍（10%）、平穩期 1.5 倍（40%）、龐氏騙局歸零（50%）。`,
+        body: `<div class="invest-box"><span>投入金額</span><strong>${money(offer.cost)}</strong><small>目前總資產 ${money(player?.cash || 0)}</small><div class="odds"><i>3× · 10%</i><i>1.5× · 40%</i><i>0× · 50%</i></div></div>`,
+        actions: `<button class="secondary" data-invest="no">跳過</button><button class="primary" data-invest="yes" ${offer.cost <= 0 ? 'disabled' : ''}>投入 ${money(offer.cost)}</button>`
+      });
+    } else if (s.type === 'tax') {
+      const offer = p.ext.taxChoice;
+      const player = p.players.find(x => x.id === offer.playerId);
+      const amount = Math.floor(Math.max(0, player?.cash || 0) * 0.5);
+      const ticket = player?.mythics?.find(x => x.id === 'indulgence');
+      updateExtModal({
+        kicker: 'TAX OFFICE · 查稅局', icon: '🏛️', title: '國稅局找上門', type: 'tax',
+        text: `${player?.name || ''} 被查出帳目異常。選擇繳交 50% 總資產，或接受 2 回合羈押。`,
+        body: `<div class="tax-box"><div><span>應繳稅額</span><strong>${money(amount)}</strong></div>${ticket ? `<p class="ticket-note">🎫 你持有贖罪券（${ticket.charges} 次），可全額抵銷本次稅金。</p>` : ''}</div>`,
+        actions: `<button class="secondary" data-tax="detain">接受羈押 2 回合</button><button class="primary" data-tax="pay">繳稅 ${money(amount)}</button>`
+      });
+    } else if (s.type === 'insider') {
+      const offer = p.ext.insiderOffer;
+      const player = p.players.find(x => x.id === offer.playerId);
+      updateExtModal({
+        kicker: 'INSIDER TRADING · 內線交易', icon: '🌈', title: '命運輪盤', type: 'insider',
+        text: `${player?.name || ''} 可以花 100 啟動命運輪盤。輪盤停止後需按確認才會套用結果，用過後此格會移位重生。`,
+        body: `<div class="wheel-preview">${['🌟', '💀', '💸', '✂️', '🎒', '🕶️', '🤑', '👻', '⭐', '💱', '🥣', '🤡'].map(x => `<span>${x}</span>`).join('')}</div>`,
+        actions: `<button class="secondary" data-insider="no">放棄</button><button class="primary" data-insider="yes" ${player?.cash < 100 ? 'disabled' : ''}>支付 100 啟動</button>`
+      });
+    }
+  }
+
+  function openFateDice() {
+    const p = state();
+    const player = p?.players?.[p.turnIndex];
+    if (!p || !player || !isLocalOwner(p, player.id)) return;
+    openExtModal({
+      kicker: 'SPECIAL ITEM · 命運骰子',
+      icon: '🎲',
+      title: '選擇前進步數',
+      text: '選擇 1–6 步，命運骰子使用後會消失。',
+      type: 'fateDice',
+      body: `<div class="fate-dice-grid" role="group" aria-label="選擇 1 到 6 步">${[1, 2, 3, 4, 5, 6].map(value => `<button type="button" data-fate-step="${value}" aria-label="前進 ${value} 步">${value}</button>`).join('')}</div>`
+    });
+  }
+
+  function afterSpecialChange() {
+    const p = state();
+    if (!p) return;
+    if (p.status !== 'playing') {
+      if (modal && ['auction', 'invest', 'tax', 'insider', 'star', 'replace', 'event'].includes(modal)) closeExtModal();
+      return;
+    }
+    // 棋子移動／骰子動畫期間絕不彈出互動視窗，避免提前暴雷。
+    if (app()?.isAnimating?.()) return;
+    // 內線交易輪盤播放期間，先讓輪盤完成演出。
+    if (wheelOpen || p.ext?.wheelPending) return;
+    // 事件格提示優先於所有決策與特殊格視窗。
+    if (p.ext?.eventPrompt) {
+      if (modal && ['auction', 'invest', 'tax', 'insider', 'star', 'replace', 'truth', 'tile', 'debug-items'].includes(modal)) closeExtModal();
+      openEventPrompt(p);
+      return;
+    }
+    if (modal === 'event') closeExtModal();
+    if (p.pendingDecision && modal && ['truth', 'tile', 'debug-items'].includes(modal)) closeExtModal();
+    const owner = specialOwnerId(p);
+    if (hasSpecialOffer(p)) {
+      if (modal && ['truth', 'tile', 'debug-items', 'event'].includes(modal)) closeExtModal();
+      if (!isLocalOwner(p, owner)) {
+        if (modal && ['auction', 'invest', 'tax', 'insider', 'star', 'replace'].includes(modal)) closeExtModal();
+        return;
+      }
+      if (p.ext?.replaceOffer) { openReplaceOffer(p); return; }
+      if (p.ext?.starOffer) { openStarOffer(p); return; }
+      if (p.ext?.auction) {
+        const cur = window.__partyEngine?.extAuctionCurrent?.(p) || null;
+        openSpecialModal({ type: 'auction', current: cur });
+        return;
+      }
+      if (p.ext?.investOffer) { openSpecialModal({ type: 'invest' }); return; }
+      if (p.ext?.taxChoice) { openSpecialModal({ type: 'tax' }); return; }
+      if (p.ext?.insiderOffer) { openSpecialModal({ type: 'insider' }); return; }
+    }
+    if (modal && ['auction', 'invest', 'tax', 'insider', 'star', 'replace', 'event'].includes(modal)) closeExtModal();
+  }
+
+  // app.js 的快速決策視窗會先詢問這裡，確保事件提示／特殊格／動畫全部結束後才彈出。
+  function decisionBlocked(p) {
+    if (!p) return false;
+    if (app()?.isAnimating?.()) return true;
+    if (p.ext?.vectorPending) return true;
+    if (Date.now() < vectorLockUntil) return true;
+    if (p.ext?.eventPrompt) return true;
+    if (wheelOpen || p.ext?.wheelPending) return true;
+    if (hasSpecialOffer(p)) return true;
+    if (Date.now() < decisionGateUntil) return true;
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // 輪盤
+  // -------------------------------------------------------------------------
+  function showWheel(data) {
+    const p = state();
+    if (!p || !data) return;
+    if (data.playerId && !isLocalOwner(p, data.playerId)) { lastWheelKey = String(data.at || data.index || ''); return; }
+    const el = $('#wheel-overlay');
+    if (!el) return;
+    const effects = window.__partyData?.WHEEL_EFFECTS || [];
+    const symbols = (effects.length ? effects.map(e => e.icon) : ['🌟', '💀', '💸', '✂️', '🎒', '🕶️', '🤑', '👻', '⭐', '💱', '🥣', '🤡']);
+    const effect = data.effect || effects[data.index] || null;
+    const index = Number.isInteger(data.index) ? data.index : Math.max(0, effects.findIndex(e => e.id === effect?.id));
+    wheelTimers.forEach(t => clearTimeout(t));
+    wheelTimers = [];
+    wheelResolving = false;
+    wheelOpen = true;
+    el.hidden = false;
+    el.innerHTML = `<div class="wheel-card"><p class="ext-kicker">DESTINY WHEEL</p>
+      <div class="wheel-stage"><div class="wheel-ring">${symbols.map((s, i) => `<span style="--i:${i}">${s}</span>`).join('')}<div class="wheel-center">🌈</div></div><div class="wheel-pointer">▲</div></div>
+      <h3>命運輪盤轉動中…</h3><div class="wheel-result" hidden></div></div>`;
+    sound('wheel');
+    const ring = el.querySelector('.wheel-ring');
+    const rotation = 5 * 360 + ((180 - index * 30) % 360 + 360) % 360;
+    requestAnimationFrame(() => {
+      if (!ring || !el.isConnected) return;
+      ring.style.transition = 'transform 2s cubic-bezier(.12,.7,.16,1)';
+      ring.style.transform = `rotate(${rotation}deg)`;
+    });
+    wheelTimers.push(setTimeout(() => {
+      const title = el.querySelector('.wheel-card h3');
+      if (title) title.textContent = '命運已定，等待確認…';
+      // 輪盤完全靜止 1 秒後只顯示確認提示；效果必須等玩家按下確認才套用。
+      wheelTimers.push(setTimeout(() => readyWheel(el, data, effect), 1000));
+    }, 2000));
+  }
+
+  function readyWheel(el, data, effect) {
+    if (!el || el.hidden) return;
+    wheelResolving = false;
+    const resultNode = el.querySelector('.wheel-result');
+    if (!resultNode) return;
+    resultNode.hidden = false;
+    resultNode.innerHTML = `<strong>${effect?.icon || '🌈'} ${h(effect?.name || '命運結果')}</strong><p>${h(effect?.desc || '按下確認後才會正式套用。')}</p><button class="primary" type="button" data-wheel-confirm>確認並套用</button>`;
+    sound('click');
+    const button = resultNode.querySelector('[data-wheel-confirm]');
+    if (button) button.onclick = () => confirmWheel(el, data);
+  }
+
+  function confirmWheel(el, data) {
+    if (wheelResolving) return;
+    const p = state();
+    if (!p || !el) return;
+    wheelResolving = true;
+    // 先關閉視窗，再正式套用效果與播放對應動畫，避免動畫疊在提示視窗上。
+    el.hidden = true;
+    wheelOpen = false;
+    Promise.resolve(app()?.run?.(() => {
+      const result = window.__partyEngine?.extResolveWheel?.(state(), { playerId: data.playerId, at: data.at });
+      if (result) app()?.notify?.(`🌈 ${result.effect?.name || '命運輪盤'}：${result.text || ''}`);
+      else { lastWheelKey = ''; app()?.notify?.('輪盤結果已失效。'); }
+    })).finally(() => {
+      wheelResolving = false;
+      afterSpecialChange();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 真理之門 / 道具挑選 / 格子挑選
+  // -------------------------------------------------------------------------
+  function openTruthGate() {
+    const p = state();
+    if (!p) return;
+    if (!canUseLocalAction(p)) { app()?.notify('現在不是你的回合，請等待其他玩家。'); return; }
+    if (p.phase !== 'roll') { app()?.notify('神話道具只能在擲骰前使用。'); return; }
+    const player = p.players[p.turnIndex];
+    const entry = player?.mythics?.find(x => x.id === 'truthGate');
+    const normal = (window.__partyData?.ITEMS || []).filter(i => !i.hidden);
+    const mythics = (window.__partyData?.MYTHIC_ITEMS || []).filter(i => !i.hidden);
+    const inventoryCount = (player?.items?.length || 0) + (player?.mythics?.length || 0);
+    const cashOk = (player?.cash || 0) >= 1000;
+    const hasSpace = inventoryCount < 3;
+    const bankai = Boolean(player?.ext?.bankai);
+    const canBuy = cashOk && hasSpace && !bankai;
+    const canSell = inventoryCount > 0;
+    const buyReason = !cashOk ? '總資產不足 1,000' : bankai ? '卍解期間禁止獲取新道具' : !hasSpace ? '道具欄已滿（3/3）' : '';
+    const sellOptions = [
+      ...(player?.items || []).map((id, idx) => {
+        const it = normal.find(x => x.id === id) || { icon: '🎁', name: id };
+        return `<option value="normal:${idx}">${it.icon} ${h(it.name)}</option>`;
+      }),
+      ...(player?.mythics || []).map((m, idx) => {
+        const it = mythics.find(x => x.id === m.id) || { icon: '🗿', name: m.id };
+        return `<option value="mythic:${idx}">${it.icon} ${h(it.name)}（神話）</option>`;
+      })
+    ].join('');
+    updateExtModal({
+      kicker: 'TRUTH GATE · 真理之門', icon: '🚪', title: `真理之門（${entry?.charges ?? 0} 次）`, type: 'truth',
+      text: '將 1,000 總資產煉成指定普通道具，或把 1 個道具煉成 1,000 總資產。',
+      body: `<div class="truth-grid">
+        <div><h4>💰 1000 → 普通道具</h4><select id="truth-buy" ${canBuy ? '' : 'disabled'}>${normal.map(i => `<option value="${i.id}">${i.icon} ${h(i.name)}</option>`).join('') || '<option value="">沒有可煉成的道具</option>'}</select><button class="secondary" data-truth="buy" ${canBuy ? '' : 'disabled'}>煉成道具</button>${buyReason ? `<small class="truth-lock">${h(buyReason)}</small>` : '<small class="truth-hint">金錢轉道具僅能產出普通道具。</small>'}</div>
+        <div><h4>🎒 道具 → 1000</h4><select id="truth-sell" ${canSell ? '' : 'disabled'}>${sellOptions || '<option value="">背包裡沒有道具</option>'}</select><button class="secondary" data-truth="sell" ${canSell ? '' : 'disabled'}>煉成 1000</button><small class="${canSell ? 'truth-hint' : 'truth-lock'}">${canSell ? '普通與神話道具都可煉成 1,000。' : '背包裡沒有道具可以煉成金錢。'}</small></div>
+      </div>`,
+      actions: `<button class="secondary" data-truth="close">取消</button>`
+    });
+  }
+
+  function openDebugItemPicker(kind) {
+    const p = state();
+    if (!p) return;
+    if (!canUseLocalAction(p)) { app()?.notify('現在不是你的回合，請等待其他玩家。'); return; }
+    const { ITEMS = [], MYTHIC_ITEMS = [] } = window.__partyData || {};
+    const normal = ITEMS;
+    const mythics = MYTHIC_ITEMS;
+    const showNormal = kind !== 'mythic';
+    const showMythic = kind !== 'normal';
+    const entries = [
+      ...(showNormal ? normal.map(i => ({ kind: 'normal', meta: i, hidden: false })) : []),
+      ...(showMythic ? mythics.map(i => ({ kind: 'mythic', meta: i, hidden: Boolean(i.hidden) })) : [])
+    ];
+    updateExtModal({
+      kicker: 'DEBUG · 測試模式', icon: '🧪', title: '新增道具', type: 'debug-items',
+      text: '點擊即可直接加入目前玩家的道具欄（含一般與隱藏道具）。道具欄已滿時會自動開啟替換視窗。',
+      body: `<div class="debug-item-grid">${entries.map(e => `<button type="button" class="debug-item ${e.kind}" data-give-kind="${e.kind}" data-give-id="${e.meta.id}"><span>${e.meta.icon}</span><strong>${h(e.meta.name)}${e.hidden ? '（隱藏）' : ''}</strong><small>${h(e.meta.desc)}</small></button>`).join('') || '<div class="empty-state">目前沒有可新增的道具。</div>'}</div>`,
+      actions: `<button class="secondary" data-truth="close">取消</button>`
+    });
+  }
+
+  function openTilePicker(opts, callback) {
+    const p = state();
+    if (!p) return;
+    if (!canUseLocalAction(p)) { app()?.notify('現在不是你的回合，請等待其他玩家。'); return; }
+    tilePick = { opts, callback };
+    const tiles = p.board || [];
+    updateExtModal({
+      kicker: 'TARGET TILE', icon: '🎯', title: opts.title || '選擇格子', type: 'tile',
+      text: opts.text || '點擊地圖上的格子。',
+      body: `<div class="tile-picker">${tiles.map(t => `<button type="button" class="pick-tile ${t.special ? 'special' : ''} ${t.type}" data-pick-tile="${t.index}" ${opts.excludeStart && t.index === 0 ? 'disabled' : ''}><small>${String(t.index).padStart(2, '0')}</small><span>${t.icon}</span><strong>${h(t.label)}</strong></button>`).join('')}</div>`,
+      actions: `<button class="secondary" data-truth="close">取消</button>`
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // 除錯面板
+  // -------------------------------------------------------------------------
+  function ensureDebugPanel(p) {
+    let panel = $('#debug-panel');
+    if (!p?.ext?.debug || !canUseLocalAction(p)) { panel?.remove(); return; }
+    const side = $('.side-stack');
+    if (!side) return;
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'debug-panel';
+      panel.className = 'panel debug-panel';
+      side.appendChild(panel);
+    }
+    panel.innerHTML = `<div class="panel-title"><h3>🧪 測試工具</h3><span class="pill">DEBUG</span></div>
+      <p class="debug-hint">點「新增道具」可獲得一般或隱藏道具；先點玩家或幽靈，再點格子即可瞬移。</p>
+      <div class="debug-buttons"><button class="quiet" data-debug-action="add">➕ 新增道具</button><button class="quiet" data-debug-action="end-turn" ${app()?.isAnimating?.() || p.status !== 'playing' ? 'disabled' : ''}>⏭️ 結束回合</button></div>
+      <p class="debug-selected">${debugSelected ? `已選：${debugSelected.type === 'ghost' ? '👻 幽靈' : h(p.players.find(x => x.id === debugSelected.id)?.name || '玩家')} → 點格子傳送` : '尚未選擇傳送目標'}</p>`;
+  }
+
+  // -------------------------------------------------------------------------
+  // HUD / 憑證 / 回合鎖
+  // -------------------------------------------------------------------------
+  function ensureHud(p) {
+    if (!p) return;
+    const side = $('.side-stack');
+    if (!side) return;
+    let hud = $('#party-hud');
+    if (!hud) {
+      hud = document.createElement('div');
+      hud.id = 'party-hud';
+      hud.className = 'panel party-hud';
+      side.insertBefore(hud, side.firstChild);
+    }
+    const ext = p.ext || {};
+    const mode = window.__partyData?.GAME_MODES?.[ext.mode] || { icon: '🌟', name: '企業之星', win: '' };
+    const certs = (ext.certificates || []).filter(c => !c.resolved);
+    const domain = ext.domain;
+    const domainOwner = domain ? p.players.find(x => x.id === domain.ownerId) : null;
+    const domainTiles = domainOwner ? [-1, 0, 1].map(d => (domainOwner.position + d + p.board.length) % p.board.length) : [];
+    hud.innerHTML = `<div class="hud-mode ${ext.mode}"><span>${mode.icon} ${h(mode.name)}</span><small>第 ${p.round} / ${p.maxRounds} 季${p.round >= p.maxRounds ? ' · 最終季' : ''}</small></div>
+      <div class="hud-pills">
+        ${ext.mode === 'star' ? `<span class="hud-pill star">⭐ 星價 ${money(ext.starPrice)}</span><span class="hud-pill">已賣 ${ext.starSold || 0} 顆</span>` : ''}
+        ${ext.mode === 'tycoon' ? `<span class="hud-pill ${ext.inflation >= 2 ? 'danger' : ''}">${ext.inflation >= 4 ? '🚨 通膨 ×4' : ext.inflation >= 2 ? '⚠️ 通膨 ×2' : '🌤 平穩期'}</span><span class="hud-pill">目標 ${money(ext.target)}</span>` : ''}
+        ${ext.mode === 'evil' ? `<span class="hud-pill danger">💀 保護費 ${money(ext.doomPrice)}</span><span class="hud-pill">毀滅日 ${Math.max(1, ext.doomEvery - ((p.round - 1) % ext.doomEvery))} 季後</span>` : ''}
+        ${ext.suddenDeath ? '<span class="hud-pill danger">⚡ 驟死賽</span>' : ''}
+        ${p.net ? `<span class="hud-pill">🌐 ${h(p.net.roomCode)}</span>` : ''}
+      </div>
+      ${certs.length ? `<div class="cert-box"><div class="cert-head"><span>📈 股票憑證</span><small>季末結算</small></div>${certs.map(c => { const pl = p.players.find(x => x.id === c.playerId); return `<div class="cert-row"><span>${h(pl?.name || '')}</span><strong>${money(c.principal)}</strong></div>`; }).join('')}</div>` : ''}
+      ${domain ? `<div class="domain-box">🌐 弱者的領域：第 ${domainTiles.join('、')} 格（${h(domainOwner?.name || '')}，跟隨移動）</div>` : ''}
+      ${ext.vector ? `<div class="domain-box vector">⬆️ 矢量操作：回合結束拖到第 ${ext.vector.destination ?? '?'} 格</div>` : ''}
+    `;
+  }
+
+  function clearTurnLock() {
+    document.body.classList.remove('spectator-mode');
+    const overlay = $('#spectator-note');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function lockForeignTurn(p) {
+    if (!p?.net) return;
+    const mine = window.PartyNet?.canAct(p);
+    const ownerId = specialOwnerId(p) || p.players[p.turnIndex]?.id || null;
+    const ownerLocal = isLocalOwner(p, ownerId);
+    const waiting = p.status === 'playing' && (hasSpecialOffer(p) ? !ownerLocal : !mine);
+    document.body.classList.toggle('spectator-mode', p.status === 'playing' && (!mine || (hasSpecialOffer(p) && !ownerLocal)));
+    $$('#turn-content [data-action]').forEach(btn => {
+      if (['open-settlement', 'new-game'].includes(btn.dataset.action)) return;
+      if (!mine) btn.disabled = true;
+    });
+    let overlay = $('#spectator-note');
+    if (waiting) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'spectator-note';
+        document.body.appendChild(overlay);
+      }
+      const ownerName = playerName(p, ownerId) || window.PartyNet?.ownerName(p) || '其他玩家';
+      overlay.innerHTML = `👀 等待 <strong>${h(ownerName)}</strong> 決定中...`;
+      overlay.hidden = false;
+    } else if (overlay) {
+      overlay.hidden = true;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 結算
+  // -------------------------------------------------------------------------
+  function hideSettlement() { const el = $('#settlement-overlay'); if (el) el.hidden = true; }
+  function chart(series, { width = 660, height = 220, unit = '', rounds = [] } = {}) {
+    const all = series.flatMap(s => s.values);
+    const max = Math.max(1, ...all), min = Math.min(0, ...all);
+    const pad = { l: 52, r: 18, t: 18, b: 30 };
+    const w = width - pad.l - pad.r, hgt = height - pad.t - pad.b;
+    const n = Math.max(1, series[0]?.values.length - 1);
+    const x = i => pad.l + (n === 0 ? w / 2 : (i / n) * w);
+    const y = v => pad.t + hgt - ((v - min) / Math.max(1, max - min)) * hgt;
+    const grid = [0, 0.25, 0.5, 0.75, 1].map(t => {
+      const val = min + (max - min) * t;
+      return `<line x1="${pad.l}" y1="${y(val)}" x2="${width - pad.r}" y2="${y(val)}" class="chart-grid"/><text x="${pad.l - 8}" y="${y(val) + 4}" text-anchor="end" class="chart-axis">${Math.round(val).toLocaleString()}</text>`;
+    }).join('');
+    const lines = series.map((s, si) => {
+      const pts = s.values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+      return `<polyline points="${pts}" fill="none" stroke="${s.color || colors[si % colors.length]}" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>${s.values.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="3.2" fill="${s.color || colors[si % colors.length]}"><title>${h(s.name)} · 第 ${rounds[i] ?? i} 季：${v.toLocaleString()}${unit}</title></circle>`).join('')}`;
+    }).join('');
+    const xLabels = (series[0]?.values || []).map((_, i) => `<text x="${x(i)}" y="${height - 8}" text-anchor="middle" class="chart-axis">${rounds[i] ?? i}</text>`).join('');
+    return `<svg viewBox="0 0 ${width} ${height}" class="line-chart" role="img"><g>${grid}</g><g>${lines}</g><g>${xLabels}</g></svg>`;
+  }
+  function legend(series) {
+    return `<div class="chart-legend">${series.map((s, i) => `<span><i style="background:${s.color || colors[i % colors.length]}"></i>${h(shorten(s.name))}</span>`).join('')}</div>`;
+  }
+
+  function openSettlement(p) {
+    ensureRoot();
+    const el = $('#settlement-overlay');
+    if (!el || !p) return;
+    if (Date.now() < settlementLockUntil) { app()?.notify('毀滅日雷射播放中，請稍候…'); return; }
+    const data = window.__partyEngine?.extSettlementData?.(p) || null;
+    if (!data) return;
+    data.cash.forEach((s, i) => s.color = colors[i % colors.length]);
+    data.stars.forEach((s, i) => s.color = colors[i % colors.length]);
+    const winners = data.winners.map(x => x.name).join('、') || '無人';
+    const tabs = [['cash', '總資產']];
+    if (data.mode?.id === 'star') tabs.push(['stars', '星數排行']);
+    if (data.mode?.id === 'evil') tabs.push(['survival', '生還季數']);
+    tabs.push(['items', '道具明細']);
+    const tabButtons = tabs.map(([id, label], i) => `<button data-settle-tab="${id}" class="${i === 0 ? 'active' : ''}" type="button">${label}</button>`).join('');
+    el.hidden = false;
+    el.innerHTML = `<div class="ext-modal-backdrop"></div>
+      <div class="settlement-card">
+        <button class="ext-modal-close" data-settle-close type="button">×</button>
+        <div class="settle-head"><div><p class="ext-kicker">FINAL SETTLEMENT · ${h(data.mode.name)}</p><h2>${h(data.title)}</h2>${data.subtitle ? `<p class="settle-subtitle">${h(data.subtitle)}</p>` : ''}<p>${data.subtitle ? `共 ${data.rounds.length} 個紀錄點` : `${h(winners)} 獲勝 · 共 ${data.rounds.length} 個紀錄點`}</p></div><span class="settle-trophy">🏆</span></div>
+        <div class="settle-tabs">${tabButtons}</div>
+        <div class="settle-body"></div>
+        <div class="settle-footer">
+          ${p.net ? `<div id="confirm-ratio" class="confirm-ratio">等待全員確認…</div>` : ''}
+          <div class="settle-actions">${p.net ? `<button class="primary" id="confirm-result" type="button">確認結果</button>` : `<button class="primary" data-settle-close type="button">關閉</button>`}</div>
+        </div>
+      </div>`;
+    const body = el.querySelector('.settle-body');
+    const itemRows = [...data.itemTotals].sort((a, b) => b.total - a.total).flatMap(s => {
+      const list = s.details?.length ? s.details : [{ name: '（未獲得道具）', count: 0 }];
+      return list.map((d, i) => `<tr>${i === 0 ? `<td rowspan="${list.length}" class="item-player"><strong>${h(shorten(s.name, 8))}</strong><small>共 ${s.total} 件</small></td>` : ''}<td>${h(d.name)}</td><td>${d.count}</td></tr>`);
+    }).join('');
+    const renderTab = tab => {
+      el.querySelectorAll('[data-settle-tab]').forEach(b => b.classList.toggle('active', b.dataset.settleTab === tab));
+      if (tab === 'cash') body.innerHTML = `<div class="chart-wrap">${chart(data.cash, { rounds: data.rounds })}</div>${legend(data.cash)}<p class="chart-note">X 軸：季數　Y 軸：總資產</p>`;
+      else if (tab === 'stars') body.innerHTML = `<div class="chart-wrap">${chart(data.stars, { rounds: data.rounds })}</div>${legend(data.stars)}<p class="chart-note">X 軸：季數　Y 軸：星數</p>`;
+      else if (tab === 'survival') body.innerHTML = `<div class="rank-list">${[...data.survival].sort((a, b) => Number(b.alive) - Number(a.alive) || b.seasons - a.seasons).map((s, i) => `<div class="rank-row ${s.alive ? 'alive' : 'out'}"><span>${i + 1}</span><strong>${h(shorten(s.name, 8))}</strong><em>${s.seasons} 季</em><small>${s.alive ? '存活' : '👻 罷工團'}</small></div>`).join('')}</div>`;
+      else body.innerHTML = `<table class="item-table item-detail-table"><thead><tr><th>玩家</th><th>道具名稱</th><th>獲得次數</th></tr></thead><tbody>${itemRows}</tbody></table><p class="chart-note">依玩家道具獲取總量排序；神話與普通道具合併計算。</p>`;
+    };
+    renderTab(tabs[0][0]);
+    el.querySelectorAll('[data-settle-tab]').forEach(b => b.onclick = () => { renderTab(b.dataset.settleTab); sound('click'); });
+    el.querySelectorAll('[data-settle-close]').forEach(b => b.onclick = () => hideSettlement());
+    const confirm = el.querySelector('#confirm-result');
+    if (confirm) confirm.onclick = () => {
+      const res = window.PartyNet.confirmResult(window.PartyNet.myPlayerId);
+      confirm.disabled = true;
+      confirm.textContent = '已確認';
+      if (res) updateConfirm(res);
+      else updateConfirm({ confirmed: null, total: p.players.length });
+    };
+    if (p.net && window.PartyNet.lobby?.confirmRatio) updateConfirm(window.PartyNet.lobby.confirmRatio);
+    sound('slide');
+  }
+  function updateConfirm(ratio) {
+    const el = $('#confirm-ratio');
+    if (!el || !ratio) return;
+    if (ratio.confirmed == null) el.textContent = `已送出確認，等待其他玩家…（共 ${ratio.total} 人）`;
+    else el.textContent = `等待確認比例 ${ratio.confirmed}/${ratio.total}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // 繪製後掛載
+  // -------------------------------------------------------------------------
+  function afterRender(p) {
+    ensureRoot();
+    if (!p || !app()) return;
+    const recentAt = at => {
+      const t = Number(at);
+      return Number.isFinite(t) && t > 0 && Date.now() - t <= 8000;
+    };
+    ensureHud(p);
+    ensureDebugPanel(p);
+    document.body.classList.toggle('debug-mode', Boolean(p.ext?.debug));
+    lockForeignTurn(p);
+    const net = window.PartyNet;
+    if (net?.active && net.lobby && net.lobby.status !== 'playing') showLobby(net.lobby);
+    const subsidy = p.cornerSubsidyEvent;
+    const subsidyKey = subsidy?.at ? `${subsidy.playerId}:${subsidy.at}` : '';
+    if (subsidyKey && subsidyKey !== lastCornerSubsidyKey) {
+      lastCornerSubsidyKey = subsidyKey;
+      flashCornerSubsidy(subsidy);
+    }
+    const investment = app()?.visibleInvestmentSettlement?.(p.ext?.investmentSettlement);
+    const investmentKey = investment?.at ? `${investment.round}:${investment.at}` : '';
+    if (!investmentKey && lastInvestmentSettlementKey) {
+      lastInvestmentSettlementKey = '';
+      investmentSoundTimers.forEach(t => clearTimeout(t));
+      investmentSoundTimers = [];
+    }
+    if (investmentKey && investmentKey !== lastInvestmentSettlementKey) {
+      lastInvestmentSettlementKey = investmentKey;
+      investmentSoundTimers.forEach(t => clearTimeout(t));
+      investmentSoundTimers = [];
+      const soundByMarket = { '大牛市': 'marketBull', '平穩期': 'marketStable', '龐氏騙局': 'marketPonzi' };
+      [...new Set((investment.results || []).map(result => result.label))].forEach((market, index) => {
+        const soundName = soundByMarket[market];
+        if (soundName) investmentSoundTimers.push(setTimeout(() => sound(soundName), index * 260));
+      });
+      investmentSoundTimers.push(setTimeout(() => app()?.dismissInvestmentSettlement?.(investmentKey), 12000));
+    }
+    const ev = p.ext?.lastEvent;
+    if (ev?.at && `${ev.type}:${ev.at}` !== lastEventKey) {
+      lastEventKey = `${ev.type}:${ev.at}`;
+      if (ev.type === 'inflation') flashInflation(ev.stage);
+      else if (ev.type === 'doom') flashDoom(ev);
+      else if (ev.type === 'suddenDeath') flashSuddenDeath(ev);
+      else if (ev.type === 'witch') flashWitch();
+      else if (ev.type === 'domainHit') flashDomainHit(ev);
+      else if (ev.type === 'iceMushroom') { if (recentAt(ev.at)) flashFrozen(ev); }
+      else if (ev.type === 'bankai') { if (recentAt(ev.at)) flashBankai(); }
+      else if (ev.type === 'bankrupt') { if (recentAt(ev.at)) flashBankrupt(ev); }
+      else if (ev.type === 'ghostStrike' && !net?.active) { if (recentAt(ev.at)) flashGhostInterference(ev); }
+    }
+    const totem = p.ext?.totemEvent;
+    if (totem?.at && String(totem.at) !== lastTotemKey) {
+      lastTotemKey = String(totem.at);
+      if (recentAt(totem.at)) flashTotem(totem);
+    }
+    const indulgence = p.ext?.indulgenceEvent;
+    if (indulgence?.at && String(indulgence.at) !== lastIndulgenceKey) {
+      lastIndulgenceKey = String(indulgence.at);
+      if (recentAt(indulgence.at)) flashIndulgence(indulgence);
+    }
+    const vectorPending = p.ext?.vectorPending;
+    if (vectorPending?.at && String(vectorPending.at) !== lastVectorPendingKey) {
+      lastVectorPendingKey = String(vectorPending.at);
+      beginVectorLock(vectorPending);
+    }
+    const vector = p.ext?.vectorEvent;
+    if (vector?.at && String(vector.at) !== lastVectorKey) {
+      lastVectorKey = String(vector.at);
+      if (recentAt(vector.at)) flashVector(vector);
+    }
+    const pendingVictory = p.ext?.pendingVictory;
+    if (pendingVictory?.at) {
+      const key = `${pendingVictory.round}:${(pendingVictory.playerIds || []).join(',')}:${pendingVictory.at}`;
+      if (key !== lastVictoryKey) {
+        lastVictoryKey = key;
+        if (recentAt(pendingVictory.at)) {
+          flashVictoryPending({
+            ...pendingVictory,
+            text: `${(pendingVictory.names || []).join('、')}已達標，本季將進行結算`
+          });
+        }
+      }
+    }
+    if (p.pendingDecision) {
+      const key = `${p.sync?.gameId || ''}:${p.round}:${p.turnIndex}:${p.pendingDecision.playerId}:${p.pendingDecision.scenarioId || p.pendingDecision.kind}`;
+      if (key !== decisionGateKey) {
+        decisionGateKey = key;
+        decisionGateUntil = Date.now() + 1000;
+        clearTimeout(decisionTimer);
+        decisionTimer = setTimeout(() => {
+          if (state()?.pendingDecision) app()?.render?.();
+        }, 1080);
+      }
+    }
+    if (p.status !== 'playing') {
+      const key = `${p.sync?.gameId || ''}:${p.round}:${p.winnerIds?.join(',')}`;
+      if (key !== lastFinishKey) {
+        lastFinishKey = key;
+        const ending = playEnding(p);
+        // 毀滅日雷射至少完整播放，才允許開啟結算；星／首富結局動畫播放完再進結算。
+        const doomDelay = Math.max(0, settlementLockUntil - Date.now());
+        const delay = Math.max(ending ? 3200 : 0, doomDelay, 900);
+        setTimeout(() => { if (state()?.status !== 'playing') openSettlement(state()); }, delay);
+      }
+    }
+    if (p.round >= p.maxRounds && lastFinalRound !== p.round) {
+      lastFinalRound = p.round;
+      if (p.status === 'playing') {
+        flashFinalSeason(p.round, p.maxRounds);
+        document.querySelector('#round-badge')?.classList.add('final-season');
+      }
+    }
+    if (p.ext?.suddenDeathEvent && !p.ext._suddenShown) {
+      // 事件只顯示一次；以 lastEventKey 控制即可，這裡保留給舊存檔。
+    }
+    const settle = $('#settlement-overlay');
+    if (settle && !settle.hidden && window.PartyNet?.lobby?.confirmRatio) updateConfirm(window.PartyNet.lobby.confirmRatio);
+    afterSpecialChange();
+    const wheel = p.ext?.wheelPending;
+    if (wheel?.at && String(wheel.at) !== lastWheelKey) {
+      lastWheelKey = String(wheel.at);
+      showWheel(wheel);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 事件委派
+  // -------------------------------------------------------------------------
+  function bindEvents() {
+    document.addEventListener('click', e => {
+      const p = state();
+      const fateStep = e.target.closest('[data-fate-step]');
+      if (fateStep) {
+        const value = Number(fateStep.dataset.fateStep);
+        closeExtModal();
+        app()?.fateDiceRoll?.(value);
+        return;
+      }
+      const specialBtn = e.target.closest('[data-auction],[data-invest],[data-tax],[data-insider],[data-star-offer],[data-replace-kind],[data-replace-drop],[data-replace-drop-confirm],[data-replace-back]');
+      if (specialBtn && p && hasSpecialOffer(p) && !isLocalOwner(p, specialOwnerId(p))) {
+        app()?.notify('現在不是你的決策，請等待目前玩家完成。');
+        return;
+      }
+
+      // 事件格專屬提示
+      const eventOk = e.target.closest('[data-event-ok]');
+      if (eventOk) {
+        try {
+          app().runAction({type:'CLEAR_EVENT_PROMPT'}, () => {
+            if (window.__partyEngine?.extClearEventPrompt) window.__partyEngine.extClearEventPrompt(p);
+            else if (p?.ext) p.ext.eventPrompt = null;
+          });
+          closeExtModal();
+          eventPromptKey = '';
+          sound('click');
+        } catch (err) { app()?.notify(err.message); sound('error'); }
+        return;
+      }
+
+      // 起點買星
+      const starOffer = e.target.closest('[data-star-offer]');
+      if (starOffer) {
+        const offer = p?.ext?.starOffer;
+        if (!offer) return;
+        const buy = starOffer.dataset.starOffer === 'buy';
+        try {
+          if (buy) {
+            app().runAction({type:'STAR_OFFER',buy:true}, () => {
+              const stars = window.__partyEngine.extBuyStar(p);
+              sound('star');
+              app()?.notify(`買到第 ${stars} 顆星！`);
+            });
+          } else {
+            app().runAction({type:'STAR_OFFER',buy:false}, () => { window.__partyEngine.extSkipStarOffer(p); sound('click'); });
+          }
+          closeExtModal();
+        } catch (err) { app()?.notify(err.message); sound('error'); }
+        return;
+      }
+
+      // 黑市滿包：替換或丟棄新道具
+      const replaceSlot = e.target.closest('[data-replace-kind]');
+      if (replaceSlot) {
+        const kind = replaceSlot.dataset.replaceKind;
+        const index = Number(replaceSlot.dataset.replaceIndex);
+        try {
+          app().runAction({type:'REPLACE_ITEM',kind,index}, () => { window.__partyEngine.extResolveReplace(p, { kind, index }); });
+          closeExtModal();
+          sound('coin');
+        } catch (err) { app()?.notify(err.message); sound('error'); }
+        return;
+      }
+      if (e.target.closest('[data-replace-drop]')) {
+        replaceDropConfirm = true;
+        openReplaceOffer(p);
+        sound('click');
+        return;
+      }
+      if (e.target.closest('[data-replace-back]')) {
+        replaceDropConfirm = false;
+        openReplaceOffer(p);
+        sound('click');
+        return;
+      }
+      if (e.target.closest('[data-replace-drop-confirm]')) {
+        try {
+          app().runAction({type:'REPLACE_ITEM',dropNew:true}, () => { window.__partyEngine.extResolveReplace(p, { dropNew: true }); });
+          closeExtModal();
+          sound('ghost');
+        } catch (err) { app()?.notify(err.message); sound('error'); }
+        return;
+      }
+
+      // 擴充 modal 按鈕
+      const auction = e.target.closest('[data-auction]');
+      if (auction) {
+        const a = p?.ext?.auction;
+        if (!a) return;
+        const action = auction.dataset.auction;
+        try {
+          // 拍賣採「目前出價者」狀態，僅本人可操作；輪值由引擎推進。
+          const current = window.__partyEngine?.extAuctionCurrent?.(p);
+          if (current && window.PartyNet?.active && window.PartyNet.myPlayerId && current.id !== window.PartyNet.myPlayerId) {
+            app()?.notify(`現在由 ${current.name} 決定，請稍候。`);
+            return;
+          }
+          app().runAction({type:'AUCTION_ACTION',action}, () => { window.__partyEngine.extAuctionAction(p, action); }, { allowAuction: true });
+          sound(action === 'bid' ? 'coin' : 'click');
+        } catch (err) { app()?.notify(err.message); sound('error'); }
+        return;
+      }
+      const invest = e.target.closest('[data-invest]');
+      if (invest) {
+        app().runAction({type:'INVEST',yes:invest.dataset.invest === 'yes'}, () => { window.__partyEngine.extInvest(p, invest.dataset.invest === 'yes'); });
+        closeExtModal(); sound('slide');
+        return;
+      }
+      const tax = e.target.closest('[data-tax]');
+      if (tax) {
+        const action = tax.dataset.tax;
+        app().runAction({type:'TAX',action}, () => { action === 'pay' ? window.__partyEngine.extTaxPay(p) : window.__partyEngine.extTaxDetain(p); });
+        closeExtModal();
+        sound(action === 'pay' ? 'coin' : 'cuff');
+        return;
+      }
+      const insider = e.target.closest('[data-insider]');
+      if (insider) {
+        if (insider.dataset.insider !== 'yes') { app().runAction({type:'INSIDER',yes:false}, () => { p.ext.insiderOffer = null; }); closeExtModal(); return; }
+        app().runAction({type:'INSIDER',yes:true}, () => { window.__partyEngine.extInsiderPay(p); });
+        closeExtModal();
+        sound('wheel');
+        return;
+      }
+      const truth = e.target.closest('[data-truth]');
+      if (truth) {
+        const act = truth.dataset.truth;
+        if (act === 'close') { closeExtModal(); return; }
+        if (act === 'buy') {
+          const sel = $('#truth-buy');
+          const itemId = sel?.value;
+          if (!itemId) { app()?.notify('沒有可煉成的道具。'); return; }
+          app().runAction({type:'TRUTH_GATE',payload:{mode:'buy',itemId,mythic:false}}, () => { window.__partyEngine.extUseMythic(p, 'truthGate', { mode: 'buy', itemId, mythic: false }); });
+        } else if (act === 'sell') {
+          const val = $('#truth-sell').value || '';
+          const [kind, index] = val.split(':');
+          app().runAction({type:'TRUTH_GATE',payload:{mode:'sell',kind,index:Number(index)}}, () => { window.__partyEngine.extUseMythic(p, 'truthGate', { mode: 'sell', kind, index: Number(index) }); });
+        }
+        closeExtModal(); sound('star');
+        return;
+      }
+      const give = e.target.closest('[data-give-id]');
+      if (give) {
+        app().debugGive(give.dataset.giveKind, give.dataset.giveId);
+        closeExtModal(); sound('coin');
+        return;
+      }
+      const pick = e.target.closest('[data-pick-tile]');
+      if (pick) {
+        const idx = Number(pick.dataset.pickTile);
+        const cb = tilePick?.callback;
+        closeExtModal();
+        if (cb) cb(idx);
+        return;
+      }
+      const dbg = e.target.closest('[data-debug-action]');
+      if (dbg) {
+        const act = dbg.dataset.debugAction;
+        if (act === 'add') openDebugItemPicker('all');
+        else if (act === 'item') openDebugItemPicker('normal');
+        else if (act === 'mythic') openDebugItemPicker('mythic');
+        else if (act === 'end-turn') { closeExtModal(); app()?.debugEndTurn?.(); }
+        return;
+      }
+      const empty = e.target.closest('[data-empty-slot]');
+      if (empty && p?.ext?.debug) {
+        openDebugItemPicker('all');
+        return;
+      }
+      const extClose = e.target.closest('.ext-modal-close, [data-ext-close]');
+      if (extClose && e.target.closest('#ext-modal')) {
+        const el = $('#ext-modal');
+        if (['auction', 'decision', 'tax', 'invest', 'insider', 'star', 'replace', 'event'].includes(el?.dataset.type)) { app()?.notify('請先完成目前事件。'); return; }
+        closeExtModal(); return;
+      }
+
+      // 除錯傳送：先選玩家 / 幽靈，再點格子
+      if (p?.ext?.debug && app()?.page === 'game') {
+        if (app()?.isMapPicking?.()) return;
+        const token = e.target.closest('#board .token[data-player-id]');
+        if (token) { debugSelected = { type: 'player', id: token.dataset.playerId }; ensureDebugPanel(state()); app()?.notify('已選取玩家，請點擊目的地格子。'); return; }
+        const ghostPiece = e.target.closest('#board .ghost-piece');
+        if (ghostPiece) { debugSelected = { type: 'ghost' }; ensureDebugPanel(state()); app()?.notify('已選取幽靈，請點擊目的地格子。'); return; }
+        const tile = e.target.closest('#board [data-tile-index]');
+        if (tile && debugSelected) {
+          const idx = Number(tile.dataset.tileIndex);
+          if (debugSelected.type === 'ghost') app().debugGhostTo(idx);
+          else app().debugTeleport(debugSelected.id, idx);
+          debugSelected = null;
+          ensureDebugPanel(state());
+          return;
+        }
+      }
+    });
+
+    document.addEventListener('click', e => {
+      // 大廳/連線/結算關閉
+      if (e.target.closest('[data-settle-close]')) hideSettlement();
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        const el = $('#ext-modal');
+        if (el && !el.hidden && !['auction', 'invest', 'tax', 'insider', 'star', 'replace', 'event'].includes(el.dataset.type)) closeExtModal();
+      }
+    });
+  }
+
+  function init() {
+    ensureRoot();
+    bindEvents();
+    renderSetupExtras();
+    // 將模式資料提供給動態 UI
+    window.__partyData = window.__partyData || {
+      GAME_MODES: {
+        star: { id: 'star', name: '企業之星', icon: '🌟', desc: '出發格買星 500 起，每賣出一顆全場星價 +500，還能溢價強買。', defaultRounds: 10, defaultTarget: 3, win: '先拿 3 星；季末比較星數。', cup: '企業之星盃' },
+        tycoon: { id: 'tycoon', name: '首富競爭', icon: '💰', desc: '總資產 8,000 獲勝。季數過半通膨 2 倍，倒數兩季 4 倍。', defaultRounds: 12, defaultTarget: 8000, win: '總資產率先達到 8,000。', cup: '首富競爭盃' },
+        evil: { id: 'evil', name: '邪惡企業', icon: '💀', desc: '每 5 季毀滅日收保護費，付不出來就變成藍色幽靈。', defaultRounds: 15, defaultTarget: 0, win: '成為唯一的倖存者。', cup: '邪惡企業盃' },
+        random: { id: 'random', name: '隨機模式', icon: '🎲', desc: '開局隨機抽出三種模式之一。', defaultRounds: 12, defaultTarget: 0, win: '依抽到的模式決定。', cup: '命運隨機盃' }
+      }
+    };
+  }
+
+  return {
+    init, renderSetupExtras, showLobby, hideLobby, onGameStart, afterRender,
+    openSettlement, hideSettlement, openTilePicker, openTruthGate, openWheel: showWheel, openFateDice,
+    closeExtModal, openDebugItemPicker, updateConfirm, clearTurnLock,
+    playGhostInterference: flashGhostInterference, playSkillCue,
+    flashCornerSubsidy,
+    decisionBlocked, flashFrozen
+  };
+})();
+
+globalThis.PartyUI = PartyUI;
 
 
+
+// 供動態擴充 UI 使用；匯入後的模組資料在同一頁面共享。
+globalThis.__partyData={GAME_MODES,MODE_IDS,PARTY_ROLES,LOBBY_ROLES,MYTHIC_ITEMS,MYTHIC_BY_ID,SPECIAL_ITEM_BY_ID,SPECIAL_TILE_META,QUICK_DECISIONS,RANDOM_ROLE_ID,ITEMS,WHEEL_EFFECTS};
+globalThis.__partyEngine={
+  extSettlementData,extAuctionCurrent,extAuctionAction,extAuctionFinish,extInvest,extTaxPay,extTaxDetain,
+  extInsiderPay,extUseMythic,extDebugRollAgain,extDebugEndTurn,extModeInfo,extStarPrice,extSkipStarOffer,extResolveReplace,extBuyStar,extCanBuyStar,
+  extPrepareWheel,extResolveWheel,extClearEventPrompt,extResolveVectorPending
+};
+globalThis.PartyNet=PartyNet;
+globalThis.SoundManager=SoundManager;
 
 const $=s=>document.querySelector(s),h=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=n=>Math.round(n).toLocaleString('zh-TW'),decimal=(n,d=1)=>n===null||n===undefined?'—（資料不足）':Number(n).toFixed(d),signed=n=>`${n>=0?'+':'−'}${money(Math.abs(n))}`;
+const money=n=>Math.round(n).toLocaleString('zh-TW'),signed=n=>`${n>=0?'+':'−'}${money(Math.abs(n))}`;
 const colors=['#0f9688','#5979b0','#ce9460','#aa6b91','#c55d5d','#7e9541','#348da5','#7a60ad'];
-const scopes={global:'全球事件',personal:'個人事件',sector:'產業事件'};
-const scopeColor={global:'#cc6d61',personal:'#597bae',sector:'#ca9451'};
-const twoColumnPlayerCards=window.matchMedia('(min-width:761px) and (max-width:1439px)');
-const role=id=>ROLES.find(x=>x.id===id),event=id=>ALL_EVENTS.find(x=>x.id===id);
+const role=id=>PARTY_ROLES.find(x=>x.id===id)||PARTY_ROLES[0],item=id=>ITEMS.find(x=>x.id===id),mythic=id=>MYTHIC_BY_ID[id],boardTile=(state,i)=>boardOf(state)[i];
 const roleStories={
-  auto:'清晨六點，沖壓機的第一聲巨響傳遍廠房，經銷商已打來追問交車日期。你得讓產線不停，還要在原物料、電力和出口費上漲時守住利潤。',
-  electronics:'海外客戶催著下一批產品出貨，採購單上的零件報價卻又變了。訂單金額不小，但材料、人力和關稅一項都不能漏算。',
-  retail:'捲門一拉開，週末人潮就往百貨湧來。你得讓熱賣商品留在貨架上，同時控制補貨成本，才不會忙了一整天卻賺得很薄。',
-  bank:'櫃檯前有人等著貸款，另一邊有人急著提款。利息收入撐起獲利，但每筆壞帳都在考驗銀行手上的現金。',
-  investment:'開盤鐘聲一響，螢幕上的報價不停跳動。你盯著持有的資產等待機會，也知道市場一轉向，投資收益和資產價值都可能跟著變。',
-  energy:'調度室電話響個不停，工廠和城市都在等你的供應。需求帶來訂單，你還得算清原料、日常營運和借款利息的壓力。',
-  logistics:'天還沒亮，車隊已排在倉庫門口，客戶催問貨物何時送到。每趟運送都要用人、用能源；價格一變，這季利潤就跟著晃動。',
-  property:'接待中心的燈亮著，買方正等著下一次看屋。成交能帶進營收，但銀行利息和案場營運費每季照樣到期，空等也有代價。',
-  agriculture:'第一台貨車開進市場，司機等著你確認這批食品的去向。從原料到運輸都要算進成本，價格稍有變動，這季盈虧就可能改寫。',
-  technology:'版本上線倒數，工程師還在修最後一個問題，客戶已打來確認交付時間。人才撐起服務收入，也讓人力成為每季最大的成本。'
-};
-const manageGuides={
-  auto:['交車期限就在眼前，產線每多開一班，薪資和材料也跟著增加。','先看人力與原料成本，再決定要聘僱、裁員或借款周轉。'],
-  electronics:['海外訂單催著出貨，零件、關稅與薪資正一項項吃掉利潤。','比較收入與材料成本，調整人手前先確認手上的現金。'],
-  retail:['客人湧進店裡，缺貨會失單，備貨太多又會壓住現金。','留意商品和人力成本，再決定是否增員或借款備貨。'],
-  bank:['櫃檯忙著放款和提款，每筆壞帳都考驗銀行的資金調度。','留意流動資產與壞帳，必要時認列或收回壞帳。'],
-  investment:['開盤數字不停跳動，投資收益與資產價值可能一季內翻轉。','先看投資損益與現金，再決定是否借款度過波動。'],
-  energy:['調度室亮到深夜，訂單增加，原料與能源支出也跟著升高。','比較收入與原料、能源成本，再安排人手和資金。'],
-  logistics:['車隊等著發車，每趟運送都消耗人力與燃料。','留意能源成本，決定要增員、裁員或借款周轉。'],
-  property:['買方還在看屋，利息和案場支出卻已照常到期。','先看現金與利息成本，再謹慎調整人手和借款。'],
-  agriculture:['清晨的貨車已出發，原料與運輸漲價會吃掉每箱食品的利潤。','比較銷售與原料、能源成本，再決定人手與周轉。'],
-  technology:['產品即將上線，工程師仍在處理最後的問題。','人才是關鍵，也最花錢；聘僱前先看收入與人力成本。']
-};
-const strikeStories={
-  auto:['警報聲壓過沖壓機，整條產線突然停住。交車期限還在倒數，工資、廠房與原料帳單卻一張張送來。','車子一台也交不出去；守住現金，等下一回合重新開線。'],
-  electronics:['無塵室外擠滿停工的人，出貨倒數歸零。晶片還鎖在產線裡，海外客戶的電話已經響個不停。','訂單收入歸零，零件、關稅與薪資照付；這回合只能看著貨櫃空等。'],
-  retail:['開門前，員工把百貨大門拉下。顧客聚在門外，收銀機整天沒響，租金和備貨款卻準時到期。','沒有一筆成交，商品與人力成本仍在；先撐過這場停業。'],
-  bank:['櫃檯一夜之間空了，提款人潮排到街角。放款與利息收入停擺，維持分行運作的費用仍不停流出。','收入歸零，壞帳與營運壓力還在；這回合無法調整放款與人手。'],
-  investment:['開盤鐘響，交易室卻只剩閃爍的螢幕。分析師集體離席，機會從眼前滑過，辦公室帳單照常入帳。','投資與交易收入歸零，固定支出繼續扣；下一回合再追市場。'],
-  energy:['調度中心的對講機突然沉默，機組停在半途。需求仍在飆升，原料、設備與能源費卻沒有跟著停。','供應收入歸零，原料與維護照付；先把資金撐到下一班。'],
-  logistics:['司機把車鑰匙整排放在桌上，貨車堵滿月台。客戶催貨的訊息狂跳，油費、倉租與薪資仍持續累積。','一趟貨也送不出去，運輸成本照算；這回合只能停車等候。'],
-  property:['工地吊臂停在半空，銷售中心也熄了燈。買方等著交屋，貸款利息和案場費用卻分秒不停。','成交收入歸零，利息與固定支出照付；等復工再推進案子。'],
-  agriculture:['包裝線突然停轉，剛採下的作物堆在冷藏庫門口。通路催著上架，冷鏈和原料費每分鐘都在燒。','食品賣不出去，保存與運輸成本照付；先撐住這批貨。'],
-  technology:['上線倒數最後一刻，工程師關上筆電離開。客戶仍盯著進度條，伺服器和人力帳單卻不會暫停。','服務收入歸零，維運與薪資照付；這回合無法再做經營調整。']
+  social:'一支影片讓全城燒起來。你坐在流量儀表板前，準備把對手的公關危機變成自己的紅利。',
+  hardware:'新品發表會倒數，你卻已經算好對手的舊機型什麼時候會壞。計畫性報廢，是最優雅的攻擊。',
+  ecommerce:'購物節的倒數計時響起。你張開雙手，準備把全場對手的總資產吸進自己的購物車。',
+  investment:'螢幕上的報價不停跳動。你盯著對手的資產水位，盤算這一刀做空能割下多少。',
+  fastfood:'油鍋滋滋作響，外送單塞滿整條街。你準備用一份套餐，讓所有對手都離不開你的熱量。',
+  delivery:'天還沒亮，車隊已排在倉庫門口。你一句話，就能把罷工幽靈派到對手必經的路口。',
+  bank:'櫃檯前有人等著貸款，另一邊有人急著提款。你只要按下一個鍵，對手的帳戶就會凍結。',
+  property:'接待中心的燈亮著，買方等著下一次看屋。你已經算好，這一鏟要拆掉對手的幾格。',
+  green:'碳權價格往上跳，你的綠色工廠卻愈賺愈多。讓排碳最多的對手替你付帳。',
+  cloud:'版本上線倒數，工程師還在修最後一個問題。你已經潛進對手的系統，準備帶走能量或道具。'
 };
 const storageKey='economy-board-v1';
-const viewKey='economy-board-view-v1';
+const viewKey='economy-party-view-v1';
 const tabId=globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`;
-const clientId=(()=>{try{let id=sessionStorage.getItem('economy-board-client-v1');if(!id){id=tabId.replace(/[^\w-]/g,'');sessionStorage.setItem('economy-board-client-v1',id)}return id}catch{return tabId.replace(/[^\w-]/g,'')}})();
-// Multi-device room: the host's page owns the game; guests only send actions and render what the host broadcasts.
-const room={role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,lobby:[],nameDraft:'',lobbyTarget:'5500',lobbyRounds:'12',synced:false,closed:false,prefill:'',queue:Promise.resolve()};
 let channel=null;
 try{if('BroadcastChannel' in globalThis)channel=new BroadcastChannel(storageKey)}catch{}
-let state=null,page='home',tab='business',snapshotSelection='latest',setupPlayers=[{name:'玩家 1',roleId:'auto'},{name:'玩家 2',roleId:'electronics'}],toastTimer,resetAt=0;
-let animation=null,animationSerial=0;
-let dismissedCardKey=null;
-const MOVE_MS=1000;
-try{const view=JSON.parse(sessionStorage.getItem(viewKey));if(['business','events','dashboard','fed','history'].includes(view?.tab))tab=view.tab;if(typeof view?.snapshotSelection==='string')snapshotSelection=view.snapshotSelection}catch{}
-function rememberView(){try{sessionStorage.setItem(viewKey,JSON.stringify({tab,snapshotSelection}))}catch{}}
+let state=null,page='home',tab='board',setupPlayers=[{name:'玩家 1',roleId:'social'},{name:'玩家 2',roleId:'hardware'}],toastTimer,resetAt=0,dismissedInvestmentSettlementKey='';
+let setupMode='star',setupDebug=false,setupNetConfig=null;
+let animation=null,animationSerial=0,modal=null,mapPick=null;
+const MOVE_MS=520;
+try{const view=JSON.parse(sessionStorage.getItem(viewKey));if(['board','rules'].includes(view?.tab))tab=view.tab}catch{}
+function rememberView(){try{sessionStorage.setItem(viewKey,JSON.stringify({tab}))}catch{}}
 
-function notify(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3200)}
+function notify(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),3400)}
+function dismissInvestmentSettlement(key=investmentSettlementKey(state?.ext?.investmentSettlement)){
+  if(!key||key!==investmentSettlementKey(state?.ext?.investmentSettlement))return;
+  dismissedInvestmentSettlementKey=key;
+  render();
+}
+function investmentSettlementKey(settlement){return settlement?.at?`${settlement.round}:${settlement.at}`:''}
+function visibleInvestmentSettlement(settlement){
+  if(!settlement?.results?.length)return null;
+  if(!PartyNet.active)return settlement;
+  const playerId=PartyNet.myPlayerId;
+  if(!playerId)return null;
+  const results=settlement.results.filter(result=>result.playerId===playerId);
+  return results.length?{...settlement,results}:null;
+}
+function beginMapPick(message,callback){
+  if(animation){notify('請等待動畫結束。');return;}
+  mapPick={callback};
+  document.body.classList.add('map-pick-mode');
+  notify(message||'請直接點擊地圖上的格子（Esc 取消）。');
+}
+function cancelMapPick(){
+  if(!mapPick)return false;
+  mapPick=null;
+  document.body.classList.remove('map-pick-mode');
+  notify('已取消地圖選取。');
+  return true;
+}
 function newGameId(){return globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`}
 function prepareNewSession(game){const previous=syncInfo(state);game.sync={gameId:newGameId(),revision:0,updatedAt:Math.max(Date.now(),(previous?.updatedAt||0)+1,resetAt+1),writerId:tabId}}
-function readStored(){try{const raw=localStorage.getItem(storageKey);return raw?importGame(raw):null}catch{return undefined}}
+function readStored(){try{const raw=localStorage.getItem(storageKey);if(!raw)return null;const game=importGame(raw);return extEnsureState(game)}catch{return undefined}}
 function cancelAnimation(){animationSerial++;animation=null}
 function save(){
-  if(!state||isGuest())return;
+  if(!state)return;
+  if(PartyNet.isClient){$('#save-status').textContent='房主狀態同步中';return}
   if(!state.sync)prepareNewSession(state);
   state.sync.revision++;
   state.sync.updatedAt=Math.max(Date.now(),state.sync.updatedAt+1);
   state.sync.writerId=tabId;
-  // Multiplayer is its own mode: a host's room game goes to the room only, never into this device's saved game or other tabs.
-  if(isHost()){$('#save-status').textContent=`房間 ${room.code} · 多人對局`;broadcastRoom();return}
-  try{localStorage.setItem(storageKey,exportGame(state));$('#save-status').textContent='多頁籤已同步'}catch{$('#save-status').textContent=channel?'即時同步中；請匯出備份':'本機儲存不可用，請匯出備份'}
+  try{localStorage.setItem(storageKey,exportGame(state));$('#save-status').textContent=state.net?'房間即時同步中':'多頁籤已同步'}catch{$('#save-status').textContent=channel?'即時同步中；請匯出備份':'本機儲存不可用，請匯出備份'}
   try{channel?.postMessage({type:'state',writerId:tabId,game:state})}catch{}
-  broadcastRoom();
+  try{PartyNet.publish(state)}catch(e){console.warn('room publish failed',e)}
 }
 function clearSave(){
   const updatedAt=Math.max(Date.now(),(syncInfo(state)?.updatedAt||0)+1,resetAt+1);
@@ -628,19 +5848,21 @@ function clearSave(){
   try{channel?.postMessage({type:'reset',updatedAt,writerId:tabId})}catch{}
 }
 function adoptShared(incoming){
+  if(PartyNet.active)return false;
   if(!isNewerGame(incoming,state))return false;
   const previous=state;
-  const sharedRoll=previous&&syncInfo(previous).gameId===syncInfo(incoming).gameId&&previous.round===incoming.round&&previous.phase==='roll'&&['draw','manage','strike'].includes(incoming.phase)&&previous.turnIndex===incoming.turnIndex&&Number.isInteger(incoming.dice);
-  const from=sharedRoll?previous.players[previous.turnIndex].position:null;
+  const sameGame=previous&&syncInfo(previous).gameId===syncInfo(incoming).gameId&&previous.round===incoming.round&&previous.turnIndex===incoming.turnIndex;
+  const sharedRoll=sameGame&&previous.phase==='roll'&&incoming.lastRoll&&incoming.lastRoll.value>0&&['moving','resolve','decision'].includes(incoming.phase);
+  const from=sharedRoll?previous.players[previous.turnIndex]?.position:null;
+  const before=cashSnapshot();
   cancelAnimation();state=incoming;render();
+  if(before)animateCashChanges(before);
   $('#save-status').textContent='已從其他頁籤同步';
-  if(sharedRoll)beginRollAnimation({playerId:incoming.players[incoming.turnIndex].id,from,dice:incoming.dice,reels:incoming.reels},false);
-  broadcastRoom();
+  if(sharedRoll)beginRollAnimation(incoming.lastRoll,from,incoming.players[incoming.turnIndex]?.id,false);
   return true;
 }
 function ensureFresh(){
-  // A room game lives only in the host's memory (never in the single-device save), so there is no other tab to catch up with.
-  if(room.role)return true;
+  if(PartyNet.active)return true;
   const stored=readStored();
   if(stored===null&&state){cancelAnimation();state=null;render();notify('其他頁籤已開始新遊戲，畫面已更新。');return false}
   if(stored&&isNewerGame(stored,state)){adoptShared(stored);notify('對局已由其他頁籤更新，請確認目前回合後再操作。');return false}
@@ -650,133 +5872,175 @@ async function withGameLock(work){
   if(globalThis.navigator?.locks?.request)return navigator.locks.request(`${storageKey}-write`,{mode:'exclusive'},work);
   return work();
 }
-let auctionPrivate={id:null,bids:{}};
-const BUSY_MESSAGE='棋盤正在播放動畫，請稍候再試。';
-// Resolves to an error message when the action did not go through, so a room host can report it to the guest.
-async function run(fn){
-  if(animation)return BUSY_MESSAGE;
-  let error=null;
-  try{await withGameLock(()=>{if(!ensureFresh()){error='對局已由其他頁籤更新，請確認後再操作。';return}fn();save();render()})}
-  catch(e){error=e.message||'操作失敗';notify(error)}
-  return error;
+async function run(fn,options={}){
+  if(PartyNet.isClient){notify('此操作尚未加入房主指令白名單。');return}
+  if(animation){notify('請等待骰子與棋子移動完成。');return}
+  if(state?.ext?.vectorPending){notify('矢量操作鎖定中，請稍候。');return}
+  const auctionOwner=options.allowAuction&&state?.ext?.auction&&window.__partyEngine?.extAuctionCurrent?.(state)?.id===PartyNet.myPlayerId;
+  if(state?.net&&!PartyNet.canAct(state)&&!auctionOwner&&!options.authoritative){notify('現在不是你的回合，請等待其他玩家。');return}
+  let before=null;
+  try{await withGameLock(()=>{if(!ensureFresh())return;before=cashSnapshot();fn();save();render();options.afterCommit?.()})}
+  catch(e){notify(e.message||'操作失敗');SoundManager.play('error');return}
+  if(before)animateCashChanges(before);
 }
 
-function homeFlowLabel(metric,value){
-  if(metric==='interest')return value>0?'利息收入':'利息支出';
-  if(metric==='investment')return value>0?'投資收益':'投資損失';
-  if(metric==='export_cost')return '出口貿易費';
-  if(metric==='fixed')return '固定營運費';
-  return METRIC_LABELS[metric];
+function dispatchSkillCue(playerId){
+  const player=state?.players.find(entry=>entry.id===playerId)||activePlayer();
+  if(!player)return;
+  const event={type:'SKILL_TRIGGERED',playerId:player.id,skillName:role(player.roleId).skill.name};
+  if(PartyNet.active)PartyNet.broadcastEvent(event);
+  else PartyUI.playSkillCue?.(event);
 }
-function renderHomeRoles(){
-  $('#home-roles').innerHTML=ROLES.map(r=>{
-    const income=METRICS.reduce((sum,m)=>sum+Math.max(0,r.base[m]),0);
-    const expense=METRICS.reduce((sum,m)=>sum+Math.max(0,-r.base[m]),0);
-    const flowList=positive=>METRICS.filter(m=>positive?r.base[m]>0:r.base[m]<0).map(m=>`<div><dt>${h(homeFlowLabel(m,r.base[m]))}</dt><dd>${money(Math.abs(r.base[m]))}</dd></div>`).join('');
-    return `<article class="home-role"><div class="home-role-title"><span class="home-role-icon" aria-hidden="true">${r.icon}</span><div><span class="home-role-sector">${h(r.sector)} · 起始 ${r.baseHeadcount} 人</span><h3>${h(r.name)}</h3></div></div><p class="home-role-story">${h(roleStories[r.id])}</p><div class="home-role-totals"><div><span>基準收入</span><strong>+${money(income)}</strong></div><div><span>基準成本</span><strong>−${money(expense)}</strong></div><div><span>預估淨利</span><strong>${signed(income-expense)}</strong></div></div><div class="home-role-flows"><div><h4>收入來源</h4><dl>${flowList(true)}</dl></div><div><h4>成本與支出</h4><dl>${flowList(false)}</dl></div></div></article>`;
-  }).join('');
+
+function runAction(action,fn,options={}){
+  const playerId=action?.playerId||PartyNet.myPlayerId||activePlayer()?.id;
+  const skillAction=action?.type==='USE_SKILL'||(action?.type==='TARGET_ACTION'&&action.action==='skill');
+  const runOptions=skillAction?{...options,afterCommit:()=>dispatchSkillCue(playerId)}:options;
+  if(PartyNet.isClient){
+    PartyNet.sendAction({...action,playerId});
+    return;
+  }
+  return run(fn,runOptions);
+}
+
+function cashSnapshot(){
+  const map=new Map();
+  for(const p of state?.players||[])map.set(p.id,Number(p.cash)||0);
+  return map;
+}
+function animateCashTarget(playerId,delta){
+  const card=document.querySelector(`[data-player-card="${playerId}"]`);
+  const target=card?.querySelector('.party-money > div:first-child');
+  if(!target)return;
+  target.querySelector('.cash-burst')?.remove();
+  const burst=document.createElement('span');
+  burst.className=`cash-burst ${delta>0?'gain':'loss'}`;
+  burst.innerHTML=Array.from({length:7},(_,i)=>`<i style="--i:${i}">🪙</i>`).join('');
+  target.appendChild(burst);
+  setTimeout(()=>burst.remove(),1200);
+}
+function animateCashChanges(before){
+  if(!state||!before)return;
+  let gained=false,lost=false;
+  for(const p of state.players){
+    if(!before.has(p.id))continue;
+    const delta=Math.round((Number(p.cash)||0)-before.get(p.id));
+    if(!delta)continue;
+    animateCashTarget(p.id,delta);
+    if(delta>0)gained=true;else lost=true;
+  }
+  if(gained)SoundManager.play('cashGain');
+  if(lost)setTimeout(()=>SoundManager.play('cashLoss'),gained?120:0);
+}
+function renderHomeRoles(){  $('#home-roles').innerHTML=PARTY_ROLES.map(r=>`<article class="home-role party-role"><div class="home-role-title"><span class="home-role-icon" aria-hidden="true">${r.icon}</span><div><span class="home-role-sector">${h(r.sector)} · 起始總資產 ${money(1200)}</span><h3>${h(r.name)}</h3></div></div><p class="home-role-story">${h(roleStories[r.id])}</p><div class="home-role-skill"><span class="skill-icon" aria-hidden="true">${r.skill.icon}</span><div><small>專屬技能 · 消耗 1 能量</small><strong>${h(r.skill.name)}</strong><p>${h(r.skill.desc)}</p></div></div></article>`).join('');
+}
+function renderRules(){
+  $('#rules-items').innerHTML=ITEMS.map(x=>`<div class="rule-item"><span>${x.icon}</span><div><strong>${h(x.name)}</strong><p>${h(x.desc)}</p></div></div>`).join('');
+  $('#rules-skills').innerHTML=PARTY_ROLES.map(r=>`<div class="rule-skill"><span>${r.icon}</span><div><small>${h(r.name)} · ${h(r.sector)}</small><strong>${r.skill.icon} ${h(r.skill.name)}</strong><p>${h(r.skill.desc)}</p></div></div>`).join('');
+  const mythics=$('#rules-mythics');
+  if(mythics)mythics.innerHTML=MYTHIC_ITEMS.filter(x=>!x.hidden).map(x=>`<div class="rule-item mythic-rule"><span>${x.icon}</span><div><strong>${h(x.name)}${x.mode?`（${h(GAME_MODES[x.mode]?.name||x.mode)}限定）`:''}</strong><p>${h(x.desc)}</p></div></div>`).join('');
+  const decisions=$('#rules-decisions');
+  if(decisions)decisions.innerHTML=QUICK_DECISIONS.map(x=>`<div class="rule-item decision-rule"><span>${x.icon}</span><div><strong>${h(x.name)}</strong>${x.options.map(o=>`<p>${o.icon} <b>${h(o.label)}</b>：${h(o.desc)}</p>`).join('')}</div></div>`).join('');
 }
 function renderSetup(){
-  $('#setup-players').innerHTML=setupPlayers.map((p,i)=>`<div class="setup-player"><span class="player-numeral">${i+1}</span><input data-setup-name="${i}" aria-label="玩家 ${i+1} 名稱" maxlength="16" value="${h(p.name)}"><select data-setup-role="${i}" aria-label="玩家 ${i+1} 企業">${ROLES.map(r=>`<option value="${r.id}" ${r.id===p.roleId?'selected':''}>${h(r.name)}</option>`).join('')}</select><button class="remove-player" data-remove-player="${i}" type="button" aria-label="移除玩家 ${i+1}" ${setupPlayers.length<=2?'disabled':''}>×</button></div>`).join('');
+  $('#setup-players').innerHTML=setupPlayers.map((p,i)=>`<div class="setup-player"><span class="player-numeral">${i+1}</span><input data-setup-name="${i}" aria-label="玩家 ${i+1} 名稱" maxlength="16" value="${h(p.name)}"><select data-setup-role="${i}" aria-label="玩家 ${i+1} 企業">${LOBBY_ROLES.map(r=>`<option value="${r.id}" ${r.id===p.roleId?'selected':''}>${r.icon} ${h(r.name)}</option>`).join('')}</select><button class="remove-player" data-remove-player="${i}" type="button" aria-label="移除玩家 ${i+1}" ${setupPlayers.length<=2?'disabled':''}>×</button></div>`).join('');
   $('#add-player').disabled=setupPlayers.length>=8;
+  PartyUI?.renderSetupExtras?.();
 }
-function currentPlayer(){return state?.players[state.turnIndex]}
+function activePlayer(){return state?.players[state.turnIndex]||state?.players[0]}
 function boardCoords(i){if(i<=6)return [1,i+1];if(i<=12)return [i-5,7];if(i<=18)return [7,19-i];return [25-i,1]}
-function sectorForTile(i){const sectors=['製造業','消費業','金融業','能源與運輸','民生業','科技業'];return sectors[((Math.floor((i-3)/3)%6)+6)%6]}
-function tileName(tile,i){if(investmentTiles.includes(i))return '投資＋事件';return tile.type==='sector'?sectorForTile(i):tile.label}
-function currentCard(){
-  if(state.phase!=='manage'||!state.lastDraw||!state.dice)return null;
-  const card=state.lastDraw;
-  if(card.startedRound!==state.round||card.ownerId&&card.ownerId!==currentPlayer().id)return null;
-  const key=`${state.sync?.gameId||'local'}:${state.round}:${state.turnIndex}:${card.instanceId}`;
-  return key===dismissedCardKey?null:{card,key,event:event(card.eventId)};
+const tileValueLabel=t=>t.type==='blue'?`+${Number.isFinite(Number(t.value))&&Number(t.value)>0?Number(t.value):300}`:t.type==='red'?'−150':t.type==='yellow'?'+1 ⚡':t.type==='green'?'抽事件':t.type==='start'?'START':t.special?'特殊格':'—';
+const CORNER_MARK_LABELS={red:'紅色',green:'綠色',blue:'藍色',yellow:'黃色'};
+const CORNER_PLAYER_MARKS=[['red','紅'],['green','綠'],['blue','藍'],['yellow','黃']];
+
+function diceMarkup(value,{rolling=false}={}){
+  const faces=[1,2,3,4,5,6].map(n=>`<span class="dice-face face-${n}">${n}</span>`).join('');
+  return `<div class="dice-stage ${rolling?'is-rolling':''}" aria-label="${rolling?'骰子翻滾中':'骰子點數 '+value}"><div class="dice3d ${rolling?'tumbling':''} show-${value}">${faces}</div></div>`;
 }
-function cardCenter(){
-  if(!animation&&state.phase==='draw'){
-    const scope=BOARD[currentPlayer().position].type;
-    return `<div class="card-scene scope-${scope}"><p class="card-hint">停在${scopes[scope]}格 · 輪到${turnWho()}抽卡</p><button class="draw-deck" type="button" data-action="draw-card" aria-label="點擊抽${scopes[scope]}卡"><span class="deck-shadow" aria-hidden="true"></span><span class="deck-back"><span>✦</span><strong>${scopes[scope]}</strong><small>點一下抽卡</small></span></button><p class="card-instruction">卡片正在洗牌，點擊卡背翻開結果</p></div>`;
+function effectsMarkup(effects){
+  if(!effects?.length)return '<p class="roll-empty">這一步沒有額外效果。</p>';
+  return `<div class="effect-stack">${effects.map(e=>`<div class="roll-effect ${e.tone||'neutral'}"><span>${e.icon}</span><p>${h(e.text)}</p></div>`).join('')}</div>`;
+}
+function centerBackdropMarkup(){
+  const ext=state.ext||{};
+  const parts=[];
+  if(ext.mode==='tycoon'){
+    const stage=ext.inflationStage||1;
+    parts.push(`<div class="inflation-backdrop stage-${stage}"><span>${stage>=4?'通膨 ×4':stage>=2?'通膨 ×2':'平穩期'}</span><small>資產變動倍率</small></div>`);
   }
-  const shown=!animation&&currentCard();
-  if(shown){
-    const {card,event:e}=shown;
-    const target=card.scope==='global'?'所有適用企業':card.scope==='sector'?`${card.sector}所有企業`:'只有抽卡玩家';
-    const effects=e.effects.map(x=>`<span class="effect-chip">${h(METRIC_LABELS[x.metric])} ${x.pct>=0?'+':''}${x.pct}%</span>`).join('');
-    return `<div class="card-scene card-reveal" role="status"><p class="card-hint">${h(scopes[card.scope])} · ${h(e.id)}</p><div class="revealed-card"><span class="revealed-symbol">✦</span><h3>${h(e.name)}</h3><p>影響 ${h(target)} · 持續 ${e.duration} 季</p><div class="revealed-effects">${effects}</div></div><button class="card-continue" type="button" data-action="dismiss-card">繼續經營 →</button></div>`;
+  if(ext.mode==='evil'){
+    const remaining=ext.doomEvery-((state.round-1)%ext.doomEvery);
+    parts.push(`<div class="evil-tower ${ext.doomEvent?'is-firing':''}"><span class="tower-building">🏢</span><strong>杜芬舒斯大樓</strong><small>距離毀滅日 ${remaining} 季 · 保護費 ${money(ext.doomPrice||1000)}</small></div>`);
   }
-  return null;
+  if(ext.mode==='star'){
+    parts.push(`<div class="star-price-backdrop"><span>⭐ 全場星價</span><strong>${money(extStarPrice(state))}</strong><small>每賣出 1 顆 +500</small></div>`);
+  }
+  return `<div class="center-backdrop">${parts.join('')}</div>`;
 }
-function effectiveFedNotice(){
-  if(animation||state.status!=='playing'||state.phase!=='roll'||state.turnIndex!==0)return null;
-  const decision=state.decisions.at(-1);
-  return decision&&['rate','program','rescue','restriction'].includes(decision.kind)&&decision.nextEffectiveRound===state.round?decision:null;
+function centerMarkup(){
+  const investment=visibleInvestmentSettlement(state.ext?.investmentSettlement);
+  const investmentKey=investmentSettlementKey(investment);
+  if(investment?.results?.length&&investmentKey!==dismissedInvestmentSettlementKey){
+    const rows=investment.results.map(result=>{
+      const tone=result.label==='大牛市'?'bull':result.label==='平穩期'?'stable':'ponzi';
+      return `<div class="investment-result-row"><strong>${h(result.playerName)}</strong><span class="investment-market-tag ${tone}">${h(result.label)}</span><small>本金 ${money(result.principal)} · 回收 <b>${money(result.payout)}</b></small></div>`;
+    }).join('');
+    return `<section class="investment-market-panel center-foreground" aria-label="投資季末結算"><header><div><small>第 ${investment.round} 季 · 投資市況</small><h3>股票憑證結算</h3></div><button type="button" data-dismiss-investment aria-label="關閉投資結果">×</button></header><div class="investment-result-list">${rows}</div><footer>市況由房主結算並同步給所有玩家</footer></section>`;
+  }
+  if(state.status!=='playing'){
+    const winners=state.players.filter(p=>state.winnerIds.includes(p.id));
+    const causes={
+      stars:`率先拿下 ${state.starGoal||STAR_GOAL} 顆星`,
+      rounds:'季數上限，依模式規則排名',
+      target:`率先達到 ${money(state.ext?.targetAssets??state.ext?.target??0)} 總資產`,
+      survivor:'成為最後一位存活者'
+    };
+    const cause=causes[state.resultReason]||'對局結束';
+    const title=state.ext?.finishTitle||'派對結束';
+    return `<div class="result-scene"><span class="result-crown">🏆</span><p class="card-hint">${h(title)} · 第 ${state.round} 季</p><h3>${h(winners.map(p=>p.name).join('、')||'無人')} 獲勝</h3><p>${h(cause)}</p><div class="result-stars">${winners.map(p=>`<span style="--winner-color:${colors[p.color]}">${role(p.roleId).icon} ${h(p.name)} · ${p.stars}★ · ${money(p.cash)}</span>`).join('')}</div><button class="primary" data-action="open-settlement">查看遊戲結算</button><button class="secondary" data-action="new-game">創建新遊戲</button></div>`;
+  }
+  const p=activePlayer();
+  if(animation?.stage==='rolling')return `<div class="dice-center center-foreground"><p class="card-hint">骰子翻滾中 · 第 ${state.round} 季</p>${diceMarkup(animation.value,{rolling:true})}<h3>${h(p.name)}</h3><p>骰子停定後，棋子會逐格前進。</p><small>點數 1–6 · 只有踩在幽靈格才會觸發罷工</small></div>`;
+  if(animation?.stage==='moving')return `<div class="dice-center center-foreground"><p class="card-hint">棋子前進中 · 第 ${state.round} 季</p><h3>${h(p.name)} 前進 ${animation.value} 格</h3><p>棋子完全停下後，才會發動格子效果。</p><small>正在前往第 ${animation.position ?? p.position} 格</small></div>`;
+  if(state.phase==='skipped')return `<div class="skip-center center-foreground"><span>⏸️</span><p class="card-hint">失去行動</p><h3>${h(p.name)} 這回合暫停</h3><p>${p.ext?.eliminated?'已化為罷工團幽靈，仍可擲骰移動。':'企業暫停行動生效中，本回合不能擲骰、使用道具或技能。'}</p><small>按右側「結束回合」交給下一位玩家</small></div>`;
+  const roll=state.lastRoll;
+  if(roll&&!animation&&roll.playerId===p.id){
+    const tile=boardTile(state,roll.tileIndex)||BOARD[roll.tileIndex];
+    return `<div class="roll-result center-foreground"><p class="card-hint">${roll.value?`骰子點數 ${roll.value} · `:''}${h(tile.label)}格</p>${roll.value?'':'<div class="swap-badge">🔄</div>'}<h3>${roll.struck?'踩中罷工幽靈！':h(tile.stay)}</h3>${effectsMarkup(roll.effects)}<small>${state.phase==='decision'?'請先完成二選一決策':'確認結果後，按右側結束回合'}</small></div>`;
+  }
+  const mode=extModeInfo(state);
+  const tip=mode.id==='star'?`出發格買星 ${money(extStarPrice(state))} · 先拿 ${state.starGoal||3} 星獲勝`:mode.id==='tycoon'?`目標 ${money(state.ext?.targetAssets??state.ext?.target??0)} 總資產 · 注意通膨倍率` : mode.id==='evil'?`每 ${state.ext?.doomEvery||5} 季毀滅日 · 唯一倖存者獲勝`:`先拿 ${state.starGoal||3} 星獲勝`;
+  return `<div class="dice-center center-foreground"><p class="card-hint">輪到 ${h(p.name)} · 第 ${state.round} 季 · ${h(mode.name)}</p><h3>${h(role(p.roleId).name)}</h3><p>擲骰前可先使用道具、神話道具或發動企業技能。</p><small>${h(tip)}</small>${state.ext?.debug?'<em class="debug-chip">🧪 測試模式</em>':''}</div>`;
 }
-function fedCenter(decision){
-  if(!decision)return null;
-  const theme=decision.kind==='rate'?decision.delta>0?'tighten':'ease':decision.kind;
-  const icon={tighten:'↗',ease:'↘',program:'✦',rescue:'✚',restriction:'⛨'}[theme];
-  const detail=decision.kind==='rate'?`目前政策利率 ${decimal(state.fedRatePercent,2)}%`:decision.kind==='program'?`${state.monetaryProgram?.type||'貨幣政策'} 已啟動`:decision.kind==='rescue'?'銀行流動性支援已生效':'高風險放款限制已生效';
-  const headline=`聯準會政策更新　✦　${decision.action}　✦　第 ${state.round} 季生效　✦　`;
-  return `<div class="fed-broadcast ${theme}" role="status" aria-live="polite"><div class="fed-broadcast-top"><span class="fed-live-dot"></span><span>FED LIVE · 第 ${state.round} 季</span><span class="fed-live-dot"></span></div><div class="fed-orbit" aria-hidden="true"><span>${icon}</span></div><h3>聯準會政策快報</h3><strong class="fed-action">${h(decision.action)}</strong><div class="fed-marquee" aria-hidden="true"><div class="fed-marquee-track"><span>${h(headline)}</span><span>${h(headline)}</span></div></div><p class="fed-detail">${h(detail)}</p><small>新一季已開始 · 可以啟動拉霸</small></div>`;
-}
-function manageCenter(){
-  if(animation||state.status!=='playing'||state.phase!=='manage'||currentCard())return null;
-  const p=currentPlayer(),r=role(p.roleId),[scene,tip]=manageGuides[p.roleId],f=financials(state,p.roleId),c=state.companies[p.roleId];
-  return `<div class="manage-scene" role="status" style="--manage-accent:${colors[p.color]}"><div class="manage-label">第 ${state.round} 季 · ${h(p.name)} 的經營時間</div><div class="manage-icon" aria-hidden="true">${r.icon}</div><h3>${h(r.name)}</h3><p class="manage-story">${h(scene)}</p><p class="manage-tip"><strong>本回合怎麼做</strong>${h(tip)}</p><div class="manage-stats"><div><span>預估淨利</span><strong class="${f.profit<0?'negative':''}">${signed(f.profit)}</strong></div><div><span>目前現金</span><strong>${money(c.cash)}</strong></div></div><small>請在右側調整員工、借貸，完成後交給下一位玩家。</small></div>`;
-}
-function strikeCenter(){
-  if(animation||state.status!=='playing'||state.phase!=='strike')return null;
-  const p=currentPlayer(),r=role(p.roleId),[scene]=strikeStories[p.roleId],f=financials(state,p.roleId);
-  return `<div class="strike-scene" role="status" aria-live="polite"><span class="strike-siren">罷工警報 · 第 ${state.round} 季</span><span class="strike-ghost" aria-hidden="true">👻</span><h3>${h(r.name)}全面停工</h3><p>${h(scene)}</p><div class="strike-effects"><span>本季收入 <strong>0</strong></span><span>支出照付 <strong>${money(-f.costs)}</strong></span></div><small>本回合不能抽事件卡，也不能聘僱、裁員或借貸。</small></div>`;
-}
-function slotMarkup(values){
-  return `<div class="slot-machine" role="group" aria-label="兩個 0 到 6 的拉霸轉輪">${values.map((value,i)=>{
-    const position=animation?.reelPositions?.[i]??value;
-    const cells=Array.from({length:49},(_,cell)=>`<strong class="slot-cell">${cell%7}</strong>`).join('');
-    return `<span class="slot-reel ${animation?.stage==='rolling'&&animation.spinning[i]?'spinning':''}" aria-label="第 ${i+1} 個轉輪：${value}"><span class="slot-strip" style="transform:translateY(-${position*100}%)">${cells}</span></span>`;
-  }).join('')}</div>`;
-}
-// In a room only the device that controls the current player may press the draw deck or turn buttons.
-function renderBoard(){renderBoardContent();if(state&&auctionState(state).active||room.role&&state?.status==='playing'&&!iCanAct())$('#board [data-action="draw-card"]')?.setAttribute('disabled','')}
-function renderTurn(){renderTurnContent();gateTurnControls()}
-function gateTurnControls(){
-  if(state&&auctionState(state).active){document.querySelectorAll('#turn-content button,#turn-content input').forEach(x=>{x.disabled=true});$('#turn-content').insertAdjacentHTML('beforeend','<p class="room-wait-note">競標中，先在上方出價或放棄。</p>');return;}
-  if(!room.role||!state)return;
-  const playing=state.status==='playing';
-  if(playing?iCanAct():!isGuest())return;
-  document.querySelectorAll('#turn-content button,#turn-content input').forEach(x=>{x.disabled=true});
-  if(!playing)return;
-  $('#turn-content').insertAdjacentHTML('beforeend',`<p class="room-wait-note">${h(roomTurnNote())}</p>`);
-}
-// Turn texts say "你" only to the device that may act; everyone else sees whose turn it is.
-function turnWho(){return iCanAct()?'你':`「${h(currentPlayer().name)}」`}
-function roomTurnNote(){
-  const missing=missingSeats(),mine=mySeat(),pick='按上方「多人連線」選一位玩家。';
-  if(missing.length)return `等待入座：還差${missing.map(p=>`「${p.name}」`).join('、')}。每位玩家都有人坐之後才能開始。${mine?'':pick}`;
-  if(!mine)return '所有座位都有人了，你目前只能觀看。';
-  return `現在輪到「${currentPlayer().name}」。你是「${mine.name}」，輪到你時才能操作。`;
-}
-function renderBoardContent(){
+function renderBoard(){
+  const boardData=boardOf(state);
+  const domain=state.ext?.domain;
+  const domainOwner=domain?state.players.find(p=>p.id===domain.ownerId):null;
+  const domainPosition=domainOwner?(animation?.playerId===domainOwner.id?animation.position:domainOwner.position):null;
+  const domainTiles=new Set(domainOwner?[-1,0,1].map(d=>(domainPosition+d+boardData.length)%boardData.length):[]);
   const pos=state.players.map(p=>({p,index:animation?.playerId===p.id?animation.position:p.position}));
-  const tiles=BOARD.map((tile,i)=>{
+  const tiles=boardData.map((tile,i)=>{
     const [row,col]=boardCoords(i);
     const occupants=pos.filter(x=>x.index===i);
-    const tokens=occupants.map(x=>`<span class="token ${animation?.playerId===x.p.id?'moving':''}" title="${h(x.p.name)}" style="background:${colors[x.p.color]}"></span>`).join('');
-    return `<div class="tile ${tile.type} ${occupants.length>4?'crowded':''} ${state.ghostPosition===i?'ghost-tile':''} ${animation?.position===i?'tile-active':''} ${animation?.visited.has(i)?'tile-visited':''}" data-tile-index="${i}" style="grid-row:${row};grid-column:${col}" title="${h(tileName(tile,i))}"><span class="tile-number">${String(i).padStart(2,'0')}</span><span class="tile-type">${h(tileName(tile,i))}</span><span class="tile-icon">${tile.type==='global'?'◎':tile.type==='personal'?'◇':tile.type==='sector'?'▦':'↗'}</span><div class="tile-tokens">${tokens}</div></div>`;
+    const inDomain=domainTiles.has(i);
+    const tokens=occupants.map(x=>`<span class="token ${animation?.playerId===x.p.id&&animation.stage==='moving'?'moving':''} ${x.p.ext?.eliminated?'ghost-player':''}" data-player-id="${h(x.p.id)}" title="${h(x.p.name)}${x.p.ext?.eliminated?'（罷工團幽靈）':''}" style="background:${x.p.ext?.eliminated?'#5f8ec4':colors[x.p.color]}">${x.p.ext?.eliminated?'👻':h(x.p.name.slice(0,1))}</span>`).join('');
+    const ghostHere=state.ghostPosition===i;
+    const cornerColor=CORNER_MARKS[i];
+    const cornerBadge=cornerColor?`<span class="corner-tile-mark ${cornerColor}" title="${CORNER_MARK_LABELS[cornerColor]}角落記號" aria-label="${CORNER_MARK_LABELS[cornerColor]}角落記號"><i></i><b>${cornerColor==='red'?'紅':cornerColor==='green'?'綠':cornerColor==='blue'?'藍':'黃'}</b></span>`:'';
+    return `<div class="tile party-tile ${tile.type} ${tile.special?`special special-${tile.type}`:''} ${occupants.length>2?'crowded':''} ${ghostHere?'ghost-tile':''} ${inDomain?'domain-tile':''} ${animation?.position===i?'tile-active':''} ${animation?.visited?.has(i)?'tile-visited':''}" data-tile-index="${i}" ${inDomain?'data-domain-tile="1"':''} style="grid-row:${row};grid-column:${col}" title="${h(tile.label)}格：${h(tile.stay)}${ghostHere?'｜👻 踩在此格會扣 1,000 總資產並沒收 1 個道具':''}${inDomain?'｜🌐 弱者的領域：進入扣 100 並禁用技能／道具':''}"><span class="tile-number">${String(i).padStart(2,'0')}</span>${cornerBadge}${inDomain?'<span class="tile-domain-badge" aria-hidden="true">🌐</span>':''}<span class="tile-icon">${tile.icon}</span><span class="tile-type">${h(tile.label)}</span><span class="tile-value">${h(tileValueLabel(tile))}</span><div class="tile-tokens">${tokens}</div></div>`;
   }).join('');
-  const legacyRoll=state.dice!==null&&state.reels?.length===3&&!animation;
-  const values=animation?.displayReels||(state.reels?.length===2?state.reels:[0,0]);
-  const slotDisplay=legacyRoll?`<div class="legacy-roll">舊回合點數<br><strong>${state.reels.join(' + ')} = ${state.dice}</strong></div>`:slotMarkup(values);
-  const total=animation?.stage==='rolling'?'數字跳動中…':state.dice===null?'啟動拉霸前進':state.dice===0?'原地停留':`前進 ${state.dice} 格`;
-  const notice=fedCenter(effectiveFedNotice()),card=cardCenter(),manage=manageCenter(),strike=strikeCenter();
   const board=$('#board'),ghost=board.querySelector('.ghost-piece'),oldPosition=ghost?.dataset.position,oldRect=ghost?.getBoundingClientRect();
   ghost?.remove();
-  board.innerHTML=tiles+`<div class="board-center ${notice?'fed-live':''} ${manage?'manage-mode':''} ${strike?'strike-mode':''}">${card||notice||manage||strike||`<div class="center-icon">⌁</div><h3>市場正在運轉</h3><p>兩輪拉霸 · 逐格前進 · 每季結算</p>${slotDisplay}<div class="slot-total">${total}</div><small>${animation?.stage==='rolling'?'兩個數字依序停下':animation?.stage==='result'?'結果已出現，稍後開始移動':state.dice===0?'本次停留原地，不抽事件卡':animation?.stage==='moving'?'棋子每秒前進一格':'經過起點可獲得 250 遊戲幣'}</small>`}</div>`;
+  board.innerHTML=tiles+`<div class="board-center party-center ${state.phase==='skipped'?'skip-mode':''}">${centerBackdropMarkup()}${centerMarkup()}</div>`;
   const piece=ghost||document.createElement('span');
   if(!ghost){piece.className='ghost-piece';piece.innerHTML='<span aria-hidden="true">👻</span>';piece.setAttribute('role','img')}
+  piece.className=`ghost-piece ${state.ext?.enraged?'enraged':''}`;
   piece.dataset.position=String(state.ghostPosition);
-  piece.setAttribute('aria-label',`罷工幽靈位於第 ${state.ghostPosition} 格`);
+  piece.setAttribute('aria-label',`罷工幽靈位於第 ${state.ghostPosition} 格${state.ext?.enraged?'（憤怒狀態）':''}`);
   board.appendChild(piece);
-  const tile=board.querySelector(`[data-tile-index="${state.ghostPosition}"]`),tileRect=tile.getBoundingClientRect(),boardRect=board.getBoundingClientRect();
+  const tile=board.querySelector(`[data-tile-index="${state.ghostPosition}"]`);
+  if(!tile)return;
+  const tileRect=tile.getBoundingClientRect(),boardRect=board.getBoundingClientRect();
   piece.style.left=`${tileRect.left-boardRect.left+tileRect.width*.72}px`;
   piece.style.top=`${tileRect.top-boardRect.top+tileRect.height*.38}px`;
   if(oldRect?.width&&boardRect.width&&oldPosition!==piece.dataset.position&&!matchMedia('(prefers-reduced-motion: reduce)').matches){
@@ -789,130 +6053,82 @@ function renderBoardContent(){
     piece.animate(frames,{duration:trail?(trail.length-1)*360:850,easing:'ease-in-out'});
   }
 }
-function actionRow(id,buttons,min=1){return `<div class="action-row"><input id="${id}" type="number" min="${min}" step="1" value="${id==='staff-count'?10:100}" aria-label="${id==='staff-count'?'人數':'金額'}">${buttons.map(([label,action])=>`<button type="button" data-action="${action}">${label}</button>`).join('')}</div>`}
-function renderTurnContent(){
-  const p=currentPlayer(),r=role(p.roleId),done=state.phase==='manage',finished=state.status!=='playing';
-  if(animation){$('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="done"></span><span></span></div><p class="turn-meta">${animation.stage==='rolling'?'兩個數字正在跳動…':animation.stage==='result'?'結果已停定，稍後開始移動。':animation.dice===0?'拉出 0 + 0 = 0，棋子停留原地。':`拉出 ${animation.reels.join(' + ')} = ${animation.dice}，棋子每秒前進一格。`}</p><button class="primary" disabled>請稍候…</button>`;return}
-  if(finished){
-    const winners=state.players.filter(x=>state.winnerIds.includes(x.id)).map(x=>x.name).join('、');
-    const cause=state.status==='bankruptcy'?'有玩家破產':state.status==='goal'?'有人達成淨資產目標':'到達季數上限';
-    $('#turn-content').innerHTML=`<h2 class="turn-name">對局結束</h2><p class="turn-role">${cause}</p><p class="turn-meta">勝出：<strong>${h(winners||'無')}</strong></p><button class="secondary" data-action="new-game">再玩一局</button>`;
-    return;
-  }
-  if(state.phase==='strike'){
-    const [,tip]=strikeStories[p.roleId],f=financials(state,p.roleId);
-    $('#turn-content').innerHTML=`<h2 class="turn-name strike-turn-name">${h(p.name)} 遇上罷工</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="done"></span><span></span></div><p class="turn-meta">拉出 ${state.dice} 格，走到第 ${p.position} 格時被幽靈攔下，剩餘步數作廢。</p><p class="turn-meta strike-turn-copy">${h(tip)}</p><div class="strike-turn-effect"><strong>收入歸零</strong><span>本季支出仍有 ${money(-f.costs)} 遊戲幣</span></div><p class="turn-meta">這回合不能抽事件卡，也無法聘僱、裁員或借貸。</p><button class="primary" data-action="end-turn">${state.turnIndex===state.players.length-1?'停工結算本季 →':'停工，交給下一位 →'}</button>`;
-    return;
-  }
-  if(state.phase==='draw'||currentCard()){
-    const waiting=state.phase==='draw';
-    $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="done"></span><span></span></div><p class="turn-meta">拉出 <strong>${state.reels.join(' + ')} = ${state.dice}</strong>，停在「${h(tileName(BOARD[p.position],p.position))}」。${waiting?'請點棋盤中央流動的卡片，親手抽出事件。':'事件已翻開。看完卡片後，按「繼續經營」。'}</p>`;
-    return;
-  }
-  $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${h(r.name)} · ${h(r.sector)}</p><div class="turn-steps"><span class="done"></span><span class="${done?'done':''}"></span><span></span></div>${!done?`<p class="turn-meta">輪到${turnWho()}啟動拉霸。兩個轉輪各顯示 0–6，相加就是前進格數。</p><button class="primary" data-action="roll">啟動拉霸　▦</button>`:`<p class="turn-meta">拉出 <strong>${state.reels?.join(' + ')||'舊回合'} = ${state.dice}</strong>，停在「${h(tileName(BOARD[p.position],p.position))}」。${state.dice===0?'本次原地停留，不抽事件卡。':'完成經營後交給下一位玩家。'}</p><div class="action-block"><h4>員工調整 · 目前 ${state.companies[p.roleId].headcount} 人</h4><p>聘僱與裁員會改變全市場失業率及本企業人力成本。</p>${actionRow('staff-count',[['聘僱','hire'],['裁員','layoff']])}</div><div class="action-block"><h4>銀行借貸 · 未償 ${money(state.companies[p.roleId].debt)}</h4><p>借款增加現金與負債，不計入收入。銀行流動資產 ${money(state.bank.liquidAssets)}。</p>${actionRow('loan-amount',[['借款','loan'],['還款','repay']])}</div>${p.roleId==='bank'?`<div class="action-block"><h4>銀行壞帳</h4><p>目前不良放款 ${money(state.bank.nonperformingLoans)}。</p>${actionRow('bad-amount',[['認列','mark-bad'],['收回','recover-bad']])}</div>`:''}<button class="secondary" style="margin-top:18px" data-action="end-turn">${state.turnIndex===state.players.length-1?'結算本季 →':'交給下一位 →'}</button>`}`;
+function starTrack(stars){const goal=state?.starGoal||STAR_GOAL;return `<span class="star-track">${Array.from({length:goal},(_,i)=>`<i class="${i<stars?'on':''}">★</i>`).join('')}</span>`}
+function chipMarkup(list){return list.length?`<div class="status-chips">${list.map(c=>`<span class="status-chip ${c.tone||''}">${c.icon} ${h(c.label)}</span>`).join('')}</div>`:''}
+function inventorySlots(p){
+  const slots=[];
+  (p?.specials||[]).forEach((id,index)=>{const meta=SPECIAL_ITEM_BY_ID[id];if(meta)slots.push({kind:'special',index,entry:id,meta})});
+  (p?.mythics||[]).forEach((entry,index)=>{const meta=mythic(entry.id);if(meta)slots.push({kind:'mythic',index,entry,meta})});
+  (p?.items||[]).forEach((id,index)=>{const meta=item(id);if(meta)slots.push({kind:'normal',index,entry:id,meta})});
+  return slots;
 }
-function activeForPlayer(a,p){return a.scope==='global'||a.scope==='personal'&&a.ownerId===p.id||a.scope==='sector'&&a.sector===role(p.roleId).sector}
-function effectTextForActive(a,roleId){
-  const items=METRICS.concat('asset_value').filter(m=>m==='asset_value'||role(roleId).base[m]!==0).flatMap(m=>effectBreakdown(state,roleId,m).filter(x=>x.instanceId===a.instanceId).map(x=>`${METRIC_LABELS[m]} ${x.pct>=0?'+':''}${decimal(x.pct,1)}%`));
-  return items.length?items.join(' · '):'本企業無直接數值影響';
+function itemBarMarkup(p,{interactive=true}={}){
+  const chips=statusChips(state,p);
+  const blocked=Boolean(p?.ext?.eliminated)||chips.some(c=>['限電禁技','凍結','冰封','弱者的領域','帳戶凍結'].some(x=>c.label.includes(x)));
+  const usable=interactive&&state.phase==='roll'&&!animation&&!blocked;
+  const inventory=inventorySlots(p);
+  const slots=Array.from({length:3},(_,i)=>{
+    const slot=inventory[i];
+    if(!slot)return `<span class="item-slot empty" data-empty-slot="normal"><span class="item-icon">＋</span><span class="item-name">空欄位</span></span>`;
+    const {meta,kind,index,entry}=slot;
+    if(kind==='special')return `<span class="item-slot-wrap special-wrap"><button type="button" class="item-slot filled special-slot" data-special-id="${meta.id}" ${usable?'':'disabled'} title="${h(meta.desc)}"><span class="item-icon">${meta.icon}</span><span class="item-name">${h(meta.name)}</span></button><button type="button" class="discard-btn" data-discard-kind="special" data-discard-index="${index}" title="丟棄這個道具">🗑️</button></span>`;
+    if(kind==='mythic')return `<span class="item-slot-wrap"><button type="button" class="item-slot filled mythic-slot" data-mythic-id="${meta.id}" ${usable&&meta.kind!=='passive'?'':'disabled'} title="${h(meta.desc)}"><span class="item-icon">${meta.icon}</span><span class="item-name">${h(meta.name)}${entry.charges>1?` ×${entry.charges}`:''}</span></button><button type="button" class="discard-btn" data-discard-kind="mythic" data-discard-index="${index}" title="丟棄這個道具">🗑️</button></span>`;
+    return `<span class="item-slot-wrap"><button type="button" class="item-slot filled" data-item-id="${meta.id}" ${usable?'':'disabled'} title="${h(meta.desc)}"><span class="item-icon">${meta.icon}</span><span class="item-name">${h(meta.name)}</span></button><button type="button" class="discard-btn" data-discard-kind="normal" data-discard-index="${index}" title="丟棄這個道具">🗑️</button></span>`;
+  }).join('');
+  return `<div class="item-bar"><div class="item-bar-head"><span>🎒 道具欄 ${inventory.length}/3</span><small>普通、神話與特殊道具共用 3 格 · 擲骰前使用 · 點🗑️丟棄</small></div><div class="item-slots">${slots}</div>${p.ext?.bankai?'<p class="bankai-note">🌀 卍解中：收益 +100、免疫負面、禁止獲取新道具。</p>':''}</div>`;
+}
+function renderTurn(){
+  const p=activePlayer();
+  if(!p)return;
+  const r=role(p.roleId),chips=statusChips(state,p),mode=extModeInfo(state);
+  if(animation){
+    $('#turn-content').innerHTML=`<h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${r.icon} ${h(r.name)} · ${h(r.sector)}</p><div class="dice-mini">${diceMarkup(animation.value,{rolling:animation.stage==='rolling'})}</div><p class="turn-meta">${animation.stage==='rolling'?'骰子正在翻滾…':`骰子停在 <strong>${animation.value}</strong>，棋子逐格前進中。`}</p><button class="primary" disabled>動作進行中…</button>`;
+    return;
+  }
+  if(state.status!=='playing'){
+    const winners=state.players.filter(x=>state.winnerIds.includes(x.id)).map(x=>x.name).join('、');
+    const reason={stars:`率先拿下 ${state.starGoal||3} 顆星`,rounds:'到達季數上限',target:'率先達到總資產目標',survivor:'成為唯一倖存者'}[state.resultReason]||'對局結束';
+    $('#turn-content').innerHTML=`<h2 class="turn-name">${h(state.ext?.finishTitle||'派對結束')}</h2><p class="turn-role">${h(reason)}</p><p class="turn-meta">勝出：<strong>${h(winners||'無')}</strong></p><div class="final-rank">${[...state.players].sort((a,b)=>b.stars-a.stars||b.cash-a.cash).map((x,i)=>`<div><span>${i+1}</span><strong>${h(x.name)}</strong><em>${x.stars}★ · ${money(x.cash)}</em></div>`).join('')}</div><button class="primary" data-action="open-settlement">查看遊戲結算</button><button class="secondary" data-action="new-game">創建新遊戲</button>`;
+    return;
+  }
+  const canRoll=Boolean(state.ext?.debug)||state.phase==='roll',canEnd=['resolve','skipped'].includes(state.phase);
+  const skill=r.skill,blocked=chips.some(c=>['限電禁技','凍結','冰封','弱者的領域','帳戶凍結'].some(x=>c.label.includes(x)));
+  const acquireTargets=state.players.filter(x=>canAcquire(state,p,x));
+  const canAct=['roll','resolve'].includes(state.phase);
+  const forced=extForcedStarInfo(state);
+  const tile=boardTile(state,p.position)||BOARD[p.position];
+  const status=state.phase==='skipped'?'這回合被暫停，無法擲骰。':state.phase==='decision'?'請先完成二選一決策。':state.phase==='resolve'?`本回合已停在「${h(tile.label)}」格。`:'先使用道具、神話道具或技能，再擲骰前進。';
+  const netNote=state.net?`<span class="net-turn-note">🌐 房間 ${h(state.net.roomCode)}${PartyNet.canAct(state)?' · 你的回合':' · 等待其他玩家'}</span>`:'';
+  $('#turn-content').innerHTML=`<div class="turn-head"><div><h2 class="turn-name" style="color:${colors[p.color]}">${h(p.name)}</h2><p class="turn-role">${r.icon} ${h(r.name)} · ${h(r.sector)}</p></div><span class="position-label">第 ${p.position} 格</span></div><div class="mode-strip ${mode.id}"><span>${mode.icon} ${h(mode.name)}</span><small>${h(mode.win)}</small></div>${netNote}<div class="stat-strip"><div><span>💰 總資產</span><strong class="${p.cash<0?'negative':''}">${money(p.cash)}</strong></div><div><span>⭐ 星數</span><strong>${p.stars} <small>/ ${state.starGoal||3}</small></strong></div><div><span>⚡ 技能能量</span><strong>${p.energy}</strong></div></div>${chipMarkup(chips)}<p class="turn-meta">${h(status)}</p><div class="turn-actions"><button class="primary" data-action="roll" ${canRoll?'':'disabled'}>🎲 擲骰子</button>${forced?`<button class="secondary forced-star-btn" data-action="forced-buy-star" ${canAct?'':'disabled'}>🌟 強買星 · ${money(forced.cost)}</button>`:''}<button class="secondary skill-btn" data-action="skill" ${canRoll&&p.energy>0&&!blocked&&!p.ext?.eliminated?'':'disabled'} title="${h(skill.desc)}">${skill.icon} 發動技能 · ${h(skill.name)}</button>${acquireTargets.length?`<button class="secondary acquire-btn" data-action="acquire" ${canAct?'':'disabled'}>🤝 併購對手</button>`:''}${canRebel(p)?`<button class="secondary rebel-btn" data-action="rebel" ${canAct?'':'disabled'}>🕊️ 獨立反撲 · ${money(REBEL_COST)}</button>`:''}${state.ext?.debug?`<button class="secondary debug-end-turn" data-action="debug-end-turn">⏭️ 結束回合</button>`:''}</div><p class="skill-hint"><strong>${skill.icon} ${h(skill.name)}</strong>${h(skill.desc)}（消耗 1 能量）</p>${itemBarMarkup(p)}${canEnd?`<button class="primary end-turn" data-action="end-turn">${state.turnIndex===state.players.length-1?'結束回合，結算本季 →':'結束回合，交給下一位 →'}</button>`:''}`;
 }
 function renderPlayers(){
-  const played=state.players.slice(0,state.turnIndex),upcoming=state.players.slice(state.turnIndex+1);
-  const narrowPair=twoColumnPlayerCards.matches;
-  const ordered=state.status==='playing'?[state.players[state.turnIndex],...(narrowPair?played:upcoming),...(narrowPair?upcoming:played)]:state.players;
-  // In a room each device shows only its own player in full; everyone appears in the net-worth ranking, which keeps this column short.
-  const mine=room.role?mySeat():null,shown=room.role?(mine?[mine]:[]):ordered;
-  $('#player-cards').innerHTML=shown.map(p=>{
-    const r=role(p.roleId),f=financials(state,p.roleId),pos=companyPosition(state,p.roleId),c=state.companies[p.roleId];
-    const events=state.activeEvents.filter(a=>activeForPlayer(a,p)&&eventRemaining(a,state.round)>0);
-    const playerIndex=state.players.indexOf(p);
-    const turnState=state.status==='playing'?(playerIndex===state.turnIndex?'current':playerIndex<state.turnIndex?'played':'waiting'):'';
-    return `<article class="player-card ${turnState} ${p===mine?'mine':''}" style="--player-color:${colors[p.color]}"><div class="player-card-head"><div class="player-identity"><span class="role-icon">${r.icon}</span><div><h3>${h(p.name)}${p===mine?'<span class="you-badge">你</span>':''}</h3><small>${h(r.name)} · ${h(r.sector)}</small></div></div><span class="position-label">第 ${p.position} 格</span></div><div class="wealth-line"><span>目前淨資產</span><strong>${signed(pos.netWorth)}</strong></div><div class="finance-grid"><div class="finance-stat positive"><span>本季收入</span><strong>${signed(f.revenue+f.otherIncome)}</strong></div><div class="finance-stat negative"><span>本季成本</span><strong>${signed(f.costs)}</strong></div><div class="finance-stat ${f.profit>=0?'positive':'negative'}"><span>預估淨利</span><strong>${signed(f.profit)}</strong></div><div class="finance-stat"><span>現金</span><strong>${money(c.cash)}</strong></div><div class="finance-stat"><span>投資資產</span><strong>${money(pos.assetValue)}</strong></div><div class="finance-stat"><span>借款／員工</span><strong>${money(c.debt)} / ${c.headcount}</strong></div></div><div class="event-impact"><div class="event-impact-head"><span>作用中的事件與影響</span><span>${events.length} 張</span></div>${events.length?events.map(a=>`<div class="effect-entry"><i class="dot scope-dot ${a.scope}"></i><span><b>${h(event(a.eventId).name)}</b> · 剩 ${eventRemaining(a,state.round)} 季<br><em>${h(effectTextForActive(a,p.roleId))}</em></span></div>`).join(''):'<span class="no-events">目前沒有適用的事件</span>'}</div><details class="finance-details"><summary>查看十項收支與事件後數值</summary><table class="flow-table"><tbody>${METRICS.map(m=>`<tr><td>${METRIC_LABELS[m]}</td><td>${signed(f.flows[m])}</td></tr>`).join('')}</tbody></table></details></article>`;
-  }).join('')+(room.role?rankingMarkup(mine):'');
+  $('#player-cards').innerHTML=state.players.map((p,index)=>{
+    const r=p.ext?.ghostRole?{...role(p.roleId),name:'罷工團',icon:'👻',sector:'幽靈企業'}:role(p.roleId);
+    const chips=statusChips(state,p),children=state.players.filter(x=>x.parentId===p.id);
+    const turnState=state.status==='playing'?(index===state.turnIndex?'current':index<state.turnIndex?'played':'waiting'):'';
+    const inventory=inventorySlots(p);
+    const localClass=PartyNet.myPlayerId&&p.id===PartyNet.myPlayerId?'is-local':'';
+    const cornerMarks=CORNER_PLAYER_MARKS.map(([color,label])=>`<span class="corner-player-mark ${color} ${p.marks?.[color]?'collected':''}" title="${CORNER_MARK_LABELS[color]}角落記號 ${p.marks?.[color]?'已取得':'未取得'}"><i></i>${label}</span>`).join('');
+    return `<article class="player-card party-player-card ${turnState} ${localClass} ${p.ext?.eliminated?'eliminated':''}" style="--player-color:${p.ext?.eliminated?'#5f8ec4':colors[p.color]}" data-player-card="${h(p.id)}"><div class="player-card-head"><div class="player-identity"><span class="role-icon">${r.icon}</span><div><h3>${h(p.name)}</h3><small>${h(r.name)} · ${h(r.sector)}</small></div></div><span class="position-label">第 ${p.position} 格</span></div><div class="party-money"><div><span>💰 總資產</span><strong class="${p.cash<0?'negative':''}">${money(p.cash)}</strong></div><div><span>⭐ 星數</span><strong>${p.stars} / ${state.starGoal||3}</strong>${starTrack(p.stars)}</div><div><span>⚡ 能量</span><strong>${p.energy}</strong></div></div><div class="corner-player-marks" aria-label="四角記號"><small>四角記號</small>${cornerMarks}</div>${chipMarkup(chips)}${p.parentId?`<p class="subsidiary-note">🏢 子公司，每回合收益 40% 上繳 ${h(state.players.find(x=>x.id===p.parentId)?.name||'母公司')}${p.cash>=REBEL_COST?' · 可獨立反撲':''}</p>`:''}${children.length?`<p class="subsidiary-note parent">👑 母公司：${children.map(x=>h(x.name)).join('、')}</p>`:''}<div class="player-items">${Array.from({length:3},(_,i)=>{const slot=inventory[i];return `<span class="mini-item ${slot?(slot.kind==='mythic'?'mythic filled':slot.kind==='special'?'special filled':'filled'):''}" title="${slot?h(slot.meta.desc):'空欄位'}">${slot?slot.meta.icon:'·'}</span>`}).join('')}<small>${inventory.length}/3 道具</small></div></article>`;
+  }).join('');
 }
-function rankingMarkup(mine){
-  const current=state.status==='playing'?currentPlayer():null;
-  return `<section class="net-ranking" aria-labelledby="net-ranking-title"><h3 id="net-ranking-title">淨資產排行</h3><ol>${netWorthRanking(state).map(({player:p,netWorth,rank})=>`<li class="${p===mine?'mine':''} ${p===current?'current':''}"><span class="rank">${rank}</span><span class="rank-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}${p===mine?'（你）':''}</strong><small>${h(role(p.roleId).name)}${p===current?' · 目前回合':''}</small></div><span class="rank-worth">${money(netWorth)}</span></li>`).join('')}</ol></section>`;
-}
-function renderMini(){const s=makeSnapshot(state);const fields=[['預估通膨',`${decimal(s.inflationPct,2)}%`],['預估成長',s.growthPct===null?'資料不足':`${decimal(s.growthPct,1)}%`],['失業率',`${decimal(s.unemploymentPct,1)}%`],['政策利率',`${decimal(s.fedRatePct,2)}%`]];$('#mini-economy').innerHTML=fields.map(([label,value])=>`<div class="mini-stat"><span>${label}</span><strong>${value}</strong></div>`).join('')}
 function renderGoals(){
-  $('#goal-copy').textContent=`淨資產達 ${money(state.targetWealth)}、任一玩家破產，或第 ${state.maxRounds} 季結束。`;
-  $('#goal-progress').innerHTML=state.players.map(p=>{const wealth=companyPosition(state,p.roleId).netWorth;return `<div class="goal-person"><span>${h(p.name)}</span><span>${money(wealth)} / ${money(state.targetWealth)}</span></div><div class="goal-track"><i style="width:${Math.max(0,Math.min(100,wealth/state.targetWealth*100))}%"></i></div>`}).join('');
+  const mode=extModeInfo(state),ext=state.ext||{};
+  let copy=mode.win;
+  if(mode.id==='star')copy=`出發格買星，初始 ${money(extStarPrice(state))}，每賣出 1 顆全場 +500。率先 ${state.starGoal||3} 星獲勝；季末比較星數 → 總資產。`;
+  if(mode.id==='tycoon')copy=`率先達到 ${money(ext.targetAssets??ext.target??0)} 總資產獲勝。第 ${Math.ceil(state.maxRounds/2)+1} 季起通膨 2 倍，倒數兩季通膨 4 倍。`;
+  if(mode.id==='evil')copy=`每 ${ext.doomEvery||5} 季毀滅日收保護費，起步 ${money(ext.doomPrice||1000)}。付不出來就變成罷工團幽靈，最後存活者獲勝。`;
+  $('#goal-copy').textContent=copy;
+  $('#goal-progress').innerHTML=state.players.map(p=>`<div class="goal-person ${p.ext?.eliminated?'eliminated':''}"><span>${p.ext?.eliminated?'👻 ':''}${h(p.name)}</span><span>${starTrack(p.stars)} <em>${money(p.cash)}</em></span></div>`).join('');
 }
-function renderEvents(){
-  $('#active-events').innerHTML=state.activeEvents.length?state.activeEvents.map(a=>{
-    const e=event(a.eventId),remaining=eventRemaining(a,state.round),age=state.round-a.startedRound;
-    const target=a.scope==='global'?'全市場適用企業':a.scope==='personal'?`${state.players.find(p=>p.id===a.ownerId)?.name||'玩家'}本人`:`${a.sector}企業`;
-    return `<article class="event-card" style="--event-color:${scopeColor[a.scope]}"><div class="event-head"><span class="eyebrow">${e.id} · ${scopes[a.scope]}</span><span class="remaining">剩 ${remaining} 季</span></div><h3>${h(e.name)}</h3><p>${h(target)} · 本季倍率 ${decimal(e.decay[age]*100,1)}%</p><div class="effect-list">${e.effects.map(x=>`<span class="effect-chip">${METRIC_LABELS[x.metric]} ${x.pct>=0?'+':''}${decimal(x.pct*e.decay[age],1)}%</span>`).join('')}</div></article>`;
-  }).join(''):'<div class="empty-state">目前沒有作用中的事件。啟動拉霸並停在事件格即可抽卡。</div>';
-  $('#event-library').innerHTML=[['全球事件',GLOBAL_EVENTS],['個人事件',PERSONAL_EVENTS],['產業事件',SECTOR_EVENTS]].flatMap(([category,items])=>items.map(e=>`<div class="library-item"><div><strong>${e.id} · ${h(e.name)}</strong><p>${category}${e.sector?` · ${h(e.sector)}`:''} · ${e.effects.map(x=>`${METRIC_LABELS[x.metric]} ${x.pct>=0?'+':''}${x.pct}%`).join('、')}</p></div><span>${e.duration} 季</span></div>`)).join('');
+function renderLog(){
+  $('#party-log').innerHTML=state.log.length?state.log.slice(0,12).map((x,i)=>`<div class="log-item ${i===0?'latest':''}">${h(x)}</div>`).join(''):'<div class="log-item">等待玩家擲骰。</div>';
 }
-
-const dashboardGroups=[
-  {title:'A · 景氣、物價與就業',items:[
-    ['inflationPct','本季通膨率','%','2 + 0.08×能源漲幅 + 0.06×原料漲幅'],['previousInflationPct','上季通膨率','%','上一季快照'],['energyChangePct','全市場能源成本漲幅','%','Σ本季能源成本 / Σ基準能源成本 − 1'],['materialChangePct','全市場原物料成本漲幅','%','Σ本季原物料成本 / Σ基準原物料成本 − 1'],['revenueTotal','本季營收總額','幣','Σ企業調整後營收'],['previousRevenueTotal','上季營收總額','幣','上一季快照'],['growthPct','本季營收成長率','%','本季營收 / 上季營收 − 1'],['previousGrowthPct','上季營收成長率','%','上一季快照'],['laborForce','勞動人口','人','固定勞動人口 1,000'],['employed','就業人口','人','Σ企業員工人數'],['unemployed','失業人口','人','勞動人口 − 就業人口'],['unemploymentPct','本季失業率','%','失業人口 / 勞動人口'],['previousUnemploymentPct','上季失業率','%','上一季快照']]},
-  {title:'B · 股市與信貸',items:[
-    ['stockIndex','本季股市指數','點','100 × (1 + 全球市場事件與 QE/QT 衝擊)'],['previousStockIndex','上季股市指數','點','上一季快照；第 0 季基準 100'],['stockIndex3Ago','三季前股市指數','點','第 t−3 季快照'],['stockReturn1Pct','單季股市變化','%','本季指數 / 上季指數 − 1'],['stockReturn3Pct','三季股市變化','%','本季指數 / 三季前指數 − 1'],['totalLoans','本季總放款','幣','銀行放款存量'],['totalLoans3Ago','三季前總放款','幣','第 t−3 季快照'],['loanGrowth3Pct','三季放款成長','%','本季放款 / 三季前放款 − 1']]},
-  {title:'C · 銀行風險',items:[
-    ['liquidAssets','流動資產','幣','銀行流動資產存量'],['shortTermLiabilities','短期負債','幣','銀行短期負債存量'],['liquidityPct','流動性比率','%','流動資產 / 短期負債'],['nonperformingLoans','不良放款','幣','銀行壞帳存量'],['nplPct','不良放款率','%','不良放款 / 總放款']]},
-  {title:'D · 聯準會政策',items:[
-    ['fedRatePct','本季政策利率','%','基準 4%，政策變動為持久狀態'],['rateCooldownRounds','利率冷卻剩餘','季','利率決策後 t+1、t+2 季冷卻'],['monetaryProgram','QE / QT 狀態','','兩季估值與利息效果'],['monetaryProgramRoundsLeft','QE / QT 剩餘','季','方案生效兩季']]}
-];
-function selectedSnapshot(){if(snapshotSelection==='preview'||!state.economicHistory.length)return {snapshot:makeSnapshot(state),preview:true};const n=snapshotSelection==='latest'?state.economicHistory.at(-1).round:Number(snapshotSelection);return {snapshot:getEconomicSnapshot(state,n)||state.economicHistory.at(-1),preview:false}}
-function metricValue(s,key,unit){const value=s[key];if(key==='monetaryProgram')return `<strong>${value||'無'}</strong>`;if(value===null||value===undefined)return '<strong class="missing">—（資料不足）</strong>';const d=unit==='%'?2:unit==='點'?1:0;return `<strong>${Number(value).toLocaleString('zh-TW',{minimumFractionDigits:d,maximumFractionDigits:d})}${unit?` <small>${unit}</small>`:''}</strong>`}
-function renderDashboard(){
-  const options=[`<option value="preview">第 ${state.round} 季 · 目前預估</option>`,...state.economicHistory.slice().reverse().map(s=>`<option value="${s.round}">第 ${s.round} 季 · 已結算</option>`)];
-  $('#snapshot-select').innerHTML=options.join('');
-  $('#snapshot-select').value=snapshotSelection==='latest'&&state.economicHistory.length?String(state.economicHistory.at(-1).round):snapshotSelection;
-  if(!$('#snapshot-select').value){snapshotSelection='latest';$('#snapshot-select').value=state.economicHistory.length?String(state.economicHistory.at(-1).round):'preview'}
-  const {snapshot:s,preview}=selectedSnapshot();
-  const dateLabel=`第 ${s.round} 季${preview?' · 尚未結算的預估':' · 已結算快照'}`;
-  $('#dashboard-body').innerHTML=`<div class="dashboard-banner">${dateLabel}｜${preview?'本季抽卡與經營調整會立即更新預估；聯準會只讀取結算後保存的快照。':'以下數值與 F01–F10 判斷來自同一份已儲存快照。'} 缺少歷史值時顯示「資料不足」。</div>${dashboardGroups.map(g=>`<section class="dashboard-section"><h3>${g.title}</h3><div class="metric-grid">${g.items.map(([key,name,unit,formula])=>`<article class="metric-card"><span class="metric-name">${name}</span>${metricValue(s,key,unit)}<small>來源：${dateLabel} · ${s[key]===null&&key!=='monetaryProgram'?'資料不足':preview?'預估':'已結算'}</small><div class="formula">${formula}</div></article>`).join('')}</div></section>`).join('')}<section class="dashboard-section"><h3>D · 十條規則雷達</h3>${preview?'<div class="empty-state">本季規則會在所有玩家完成行動後評估。</div>':renderRuleList(getFedRuleEvaluations(state,s.round))}</section>`;
-}
-const statusNames={selected:'已採用',matched:'符合',not_matched:'未符合',insufficient_data:'資料不足',suppressed_by_priority:'優先序覆蓋',rate_cooldown:'利率冷卻'};
-function renderRuleList(items){if(!items)return '<div class="empty-state">尚無規則評估。</div>';return `<div class="rule-list">${FED_RULES.map(r=>{const x=items.find(e=>e.ruleId===r.id);return `<article class="rule-card"><div class="rule-top"><h3>${r.id} · ${r.name}</h3><span class="status-pill ${x.status}">${statusNames[x.status]}</span></div><p>${x.comparisons.map(h).join('<br>')}</p><p>${h(x.reason||r.formula)}</p><code>欄位：${r.fields.join('、')}</code></article>`}).join('')}</div>`}
-function renderFed(){
-  const latest=state.economicHistory.at(-1);
-  if(!latest){$('#fed-body').innerHTML='<div class="empty-state">第 1 季結算後，這裡會列出十條規則的比較數值、優先序及政策決策。</div>';return}
-  const decision=getFedDecision(state,latest.round),evals=getFedRuleEvaluations(state,latest.round);
-  const rulesOpen=$('#fed-rules')?.open;
-  $('#fed-body').innerHTML=`<div class="fed-hero"><div><span>第 ${latest.round} 季已生效利率</span><strong>${decimal(latest.fedRatePct,2)}%</strong></div><div><span>候選／採用規則</span><strong>${decision.ruleId||'無'}</strong></div><div><span>本季政策結論</span><strong>${h(decision.action)}</strong></div><div><span>生效季數／冷卻</span><strong>第 ${decision.nextEffectiveRound} 季 · ${latest.rateCooldownRounds} 季</strong></div></div><details id="fed-rules" class="disclosure-panel" ${rulesOpen?'open':''}><summary><span><small>RULE EVALUATION</small><strong>規則判斷</strong><em>優先序：F08 → F09 → F07 → F03 → F01 → F06 → F04 → F02 → F05 → F10</em></span><i aria-hidden="true">⌄</i></summary><div class="disclosure-content">${renderRuleList(evals)}</div></details>`;
-}
-function chart(data,key,title,color){if(!data.length)return `<div class="empty-state">${title}：等待第一季結算。</div>`;const values=data.map(x=>x[key]).filter(Number.isFinite),min=Math.min(...values),max=Math.max(...values),span=max-min||1;const points=data.map((s,i)=>`${35+(i/(Math.max(data.length-1,1)))*660},${165-((s[key]-min)/span)*125}`).join(' ');return `<div class="history-chart"><h3>${title}</h3><svg viewBox="0 0 730 190" role="img" aria-label="${title}歷史折線圖"><line x1="30" y1="165" x2="700" y2="165" stroke="#dfe8e3"/><polyline points="${points}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${data.map((s,i)=>{const x=35+(i/Math.max(data.length-1,1))*660,y=165-((s[key]-min)/span)*125;return `<circle cx="${x}" cy="${y}" r="4" fill="${color}"><title>第 ${s.round} 季：${decimal(s[key],1)}</title></circle><text x="${x}" y="185" text-anchor="middle" font-size="10" fill="#899b93">${s.round}</text>`}).join('')}</svg><div class="chart-legend"><span><i style="background:${color}"></i>${title} · 依已結算快照</span></div></div>`}
-function renderHistory(){const data=state.economicHistory;$('#history-body').innerHTML=`<div class="history-layout"><div>${chart(data,'revenueTotal','全市場營收', '#0e9186')}${chart(data,'stockIndex','股市指數', '#597bae')}</div><div><div class="history-chart"><h3>各季數據</h3>${data.length?`<div style="overflow:auto"><table class="history-table"><thead><tr><th>季數</th><th>通膨</th><th>成長</th><th>失業</th><th>利率</th></tr></thead><tbody>${data.slice().reverse().map(s=>`<tr><td>${s.round}</td><td>${decimal(s.inflationPct,1)}%</td><td>${s.growthPct===null?'—':decimal(s.growthPct,1)+'%'}</td><td>${decimal(s.unemploymentPct,1)}%</td><td>${decimal(s.fedRatePct,2)}%</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">尚無已結算季數。</p>'}</div><div class="history-chart"><h3>遊戲動態</h3><div class="log-list">${state.log.length?state.log.slice(0,60).map(x=>`<div class="log-item">${h(x)}</div>`).join(''):'<div class="log-item">等待玩家啟動拉霸。</div>'}</div></div></div></div>`}
-function render(){
-  auctionRender();investmentRender();
-  const onHome=page==='home',lobbyWait=!!room.role&&!state;
-  renderRoom();
-  $('#room-wait').hidden=onHome||!lobbyWait;
-  if(lobbyWait){
-    $('#room-wait-title').innerHTML=isHost()?'房間已開啟，<br><em>等大家選企業。</em>':'已加入房間，<br><em>等待房主開局。</em>';
-    $('#room-wait-copy').textContent=isHost()?'把邀請連結傳給大家。每個人（包括你）在「多人連線」視窗輸入名字、選一家企業；滿 2 位就能按「開始遊戲」。':'在「多人連線」視窗輸入名字、選一家企業，然後等房主開始遊戲；開始後棋盤會自動出現。';
-    $('#room-wait-open').textContent=isHost()?'打開房間視窗':'輸入名字、選企業';
-  }
-  $('#round-badge').hidden=onHome||!state;
-  $('#home').hidden=!onHome;
-  $('#home-btn').classList.toggle('active',onHome);
-  if(onHome){
-    $('#setup').hidden=true;$('#game').hidden=true;
-    $('#home-play-btn').textContent=room.role?'回到多人連線 →':state?'返回單機對局 →':'一台裝置輪流玩 →';
-    $('#home-room-btn').hidden=!!room.role;
-    $('#home-status').textContent=room.role?`你在房間 ${room.code} 裡；要回到單機對局，先離開房間。`:state?`單機對局進行中 · 第 ${state.round} 季。開多人連線時，這局會保留。`:'一台裝置大家輪流操作，或每個人用自己的手機連線。';
-    return;
-  }
-  if(!state){$('#setup').hidden=lobbyWait;$('#game').hidden=true;if(!lobbyWait)renderSetup();return}
-  $('#setup').hidden=true;$('#game').hidden=false;
-  $('#round-number').textContent=String(state.round).padStart(2,'0');$('#round-limit').textContent=`／${state.maxRounds} 季`;
-  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.querySelectorAll('.tab-page').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));
-  renderBoard();renderTurn();renderMini();renderGoals();renderPlayers();renderEvents();renderDashboard();renderFed();renderHistory();
-}
-function showCard(active){if(!active)return;const e=event(active.eventId);$('#modal-kicker').textContent=`${scopes[active.scope]} · ${e.id}`;$('#modal-title').textContent=e.name;$('#modal-target').textContent=`作用 ${e.duration} 季；${active.scope==='global'?'所有適用企業同時受影響':active.scope==='sector'?`${active.sector}所有企業受影響`:'只影響抽卡玩家'}`;$('#modal-effects').innerHTML=e.effects.map(x=>`<span class="effect-chip">${METRIC_LABELS[x.metric]} ${x.pct>=0?'+':''}${x.pct}%</span>`).join('');$('#card-modal').hidden=false}
-function closeCard(){$('#card-modal').hidden=true}
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function moveTokenStep(position){
   animation?.visited.add(position);
   const token=$('#board .token.moving'),destination=$(`#board [data-tile-index="${position}"] .tile-tokens`);
-  if(!token||!destination||tab!=='business'||page!=='game')return;
+  if(!token||!destination||tab!=='board'||page!=='game')return;
   const from=token.getBoundingClientRect();
   $('#board .tile-active')?.classList.remove('tile-active');
   destination.closest('.tile').classList.add('tile-active','tile-visited');
@@ -923,563 +6139,496 @@ function moveTokenStep(position){
   token.getBoundingClientRect();
   requestAnimationFrame(()=>{
     if(!token.isConnected)return;
-    token.style.transition=`transform ${MOVE_MS-80}ms linear`;
+    token.style.transition=`transform ${MOVE_MS-70}ms linear`;
     token.style.transform='translate(0,0)';
   });
 }
-function beginRollAnimation({playerId,from,dice,reels,path}){
-  if(!state||state.players[state.turnIndex]?.id!==playerId||state.dice!==dice)return;
-  if(document.hidden||tab!=='business'||page!=='game')return;
+function beginRollAnimation(roll,from,playerId,interactive=true,onDone=null){
+  if(!state||!roll||state.players[state.turnIndex]?.id!==playerId)return false;
+  if(document.hidden||tab!=='board'||page!=='game')return false;
   cancelAnimation();
   const serial=animationSerial;
-  const finalReels=Array.isArray(reels)&&reels.length===2?reels:[0,0];
-  const fullRoute=path||movementPath(from,dice),ghostStep=state.phase==='strike'?fullRoute.indexOf(state.ghostPosition):-1;
-  const route=ghostStep>=0?fullRoute.slice(0,ghostStep+1):fullRoute;
-  animation={playerId,position:from,dice,reels:finalReels,path:route,displayReels:[0,0],reelPositions:[0,0],spinning:[true,true],visited:new Set(),stage:'rolling'};
-  renderBoard();renderTurn();
-  void (async()=>{
-    const stopTicks=[10,17];
-    for(let tick=0;tick<19;tick++){
-      await pause(125);
-      if(serial!==animationSerial)return;
-      const windows=document.querySelectorAll('#board .slot-reel');
-      for(let i=0;i<2;i++){
-        if(!animation.spinning[i])continue;
-        if(tick<stopTicks[i])animation.reelPositions[i]++;
-        else {
-          const difference=(finalReels[i]-animation.reelPositions[i]%7+7)%7;
-          animation.reelPositions[i]+=difference||7;
-          animation.spinning[i]=false;
-        }
-        animation.displayReels[i]=animation.reelPositions[i]%7;
-        const reel=windows[i];if(!reel)continue;
-        reel.querySelector('.slot-strip').style.transform=`translateY(-${animation.reelPositions[i]*100}%)`;
-        reel.classList.toggle('spinning',animation.spinning[i]);
-        reel.setAttribute('aria-label',`第 ${i+1} 個轉輪：${animation.displayReels[i]}`);
-      }
-    }
-    if(serial!==animationSerial)return;
-    animation.displayReels=[...finalReels];animation.spinning=[false,false];
-    animation.stage='result';renderBoard();renderTurn();
-    await pause(1000);
-    if(serial!==animationSerial)return;
-    animation.stage='moving';renderBoard();renderTurn();
-    for(const position of animation.path){
-      if(serial!==animationSerial)return;
-      animation.position=position;moveTokenStep(position);
-      await pause(MOVE_MS);
-    }
-    if(serial!==animationSerial)return;
-    animation=null;renderBoard();renderTurn();
-  })();
-}
-
-async function rollWithAnimation(){
-  if(animation)return BUSY_MESSAGE;
-  let result=null,from=null,playerId=null,error=null;
-  try{
-    await withGameLock(()=>{
-      if(!ensureFresh()){error='對局已由其他頁籤更新，請確認後再操作。';return}
-      const player=currentPlayer();from=player.position;playerId=player.id;
-      result=rollDice(state);save();render();
-    });
-    if(result)beginRollAnimation({playerId,from,dice:result.dice,reels:result.reels,path:result.path});
-  }catch(e){error=e.message||'無法啟動拉霸';notify(error)}
-  return error;
-}
-const AMOUNT_INPUTS={hire:'#staff-count',layoff:'#staff-count',loan:'#loan-amount',repay:'#loan-amount','mark-bad':'#bad-amount','recover-bad':'#bad-amount'};
-// Shared by local clicks and actions a room host receives from guests; resolves to an error message or null.
-async function applyAction(action,amount,remote=false){
-  if(state&&auctionState(state).active)return '請先完成目前的商機競標。';
-  if(action==='roll')return rollWithAnimation();
-  if(animation)return BUSY_MESSAGE;
-  if(action==='draw-card')return run(()=>drawEvent(state));
-  if(state.phase==='draw')return remote?'請先抽事件卡。':null;
-  if(!remote&&currentCard())return null;
-  if(action==='end-turn')return run(()=>{const result=endTurn(state);if(result&&!result.finished&&result.snapshot.round%2===0)auctionOpen(state);if(result){snapshotSelection='latest';rememberView();notify(result.finished?'對局結束，請查看勝負結果。':`第 ${result.snapshot.round} 季已結算。`)}});
-  return run(()=>{const id=currentPlayer().id,n=amount;if(action==='hire')adjustStaff(state,id,n);else if(action==='layoff')adjustStaff(state,id,-n);else if(action==='loan')issueLoan(state,id,n);else if(action==='repay')repayLoan(state,id,n);else if(action==='mark-bad')updateBadLoans(state,id,n);else if(action==='recover-bad')updateBadLoans(state,id,-n)});
-}
-
-const PEERJS_URL='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',PEERJS_SRI='sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR';
-let peerLoading=null;
-// A WebRTC link that a network blocks can stall silently, so a connection that has not opened by then is given up.
-const CONNECT_TIMEOUT_MS=15000;
-const P2P_FAILED='連不上房主：房間有找到，但兩台裝置之間的直接連線沒有建立成功。學校或公司網路常會擋這種連線，建議所有裝置都改連同一個手機熱點後再試一次。';
-const SIGNAL_FAILED='連線逾時：連不上配對伺服器，請確認網路後再試。';
-const ROOM_NOT_FOUND='找不到這個房間。請確認代碼沒有打錯；如果沒錯，請房主確認遊戲頁面開在最前面：手機鎖螢幕、切到別的 App 或頁籤時，房間會暫時離線；房主重新整理頁面則會換新代碼。';
-// PeerJS emits 'disconnected' again after every failed reconnect, so attempts are spaced out instead of looping.
-const SIGNAL_RETRY_MS=5000;
-// PeerJS is only fetched when a room is used, so single-device play never needs the network.
-function loadPeerJs(){
-  if(globalThis.Peer)return Promise.resolve();
-  return peerLoading||=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=PEERJS_URL;s.integrity=PEERJS_SRI;s.crossOrigin='anonymous';s.onload=()=>resolve();s.onerror=()=>{peerLoading=null;s.remove();reject(Error('無法載入連線元件，請確認網路連線。'))};document.head.appendChild(s)});
-}
-function isHost(){return room.role==='host'}
-function isGuest(){return room.role==='guest'}
-function roomHostId(){return isHost()?clientId:room.hostClientId}
-function syncSeats(){const gameId=state?syncInfo(state).gameId:null;if(room.seatsGameId!==gameId){room.seats={};room.seatsGameId=gameId}}
-function iCanAct(){if(!room.role)return true;if(isHost())syncSeats();return canAct(room.seats,state,clientId)}
-function mySeat(){if(isHost())syncSeats();const id=Object.keys(room.seats).find(k=>room.seats[k]===clientId);return state?.players.find(p=>p.id===id)||null}
-function missingSeats(){if(isHost())syncSeats();return state?emptySeats(room.seats,state.players.map(p=>p.id)).map(id=>state.players.find(p=>p.id===id)):[]}
-const SEATS_MISSING='還有玩家沒入座，大家都坐好後才能開始。';
-function onlineClients(){return isHost()?[clientId,...[...room.guests].filter(g=>g.clientId&&g.conn.open).map(g=>g.clientId)]:room.online}
-function sendSafe(conn,message){try{if(conn?.open)conn.send(message)}catch{}}
-function roomSnapshot(welcome=false){
-  syncSeats();
-  return {t:'state',welcome,game:state?JSON.stringify({...state,log:state.log.slice(0,60)}):null,seats:room.seats,lobby:room.lobby,online:onlineClients(),hostClientId:clientId};
-}
-function broadcastRoom(){
-  if(!isHost())return;
-  const message=roomSnapshot();
-  for(const g of room.guests)if(g.clientId)sendSafe(g.conn,message);
-  renderRoom();
-}
-function resetRoom(extra={}){
-  const peer=room.peer;
-  clearTimeout(room.reconnectTimer);clearTimeout(room.connectTimer);clearTimeout(room.signalTimer);
-  Object.assign(room,{role:null,code:'',peer:null,guests:new Set(),hostConn:null,seats:{},seatsGameId:null,online:[],hostClientId:'',status:'',error:'',retries:0,reconnectTimer:null,connectTimer:null,signalTimer:null,offline:false,seatPromptFor:null,lobby:[],synced:false},extra);
-  setTimeout(()=>{try{peer?.destroy()}catch{}},300);
-}
-
-async function createRoom(){
-  if(room.role)return;
-  room.error='';room.status='正在建立房間…';renderRoom();
-  try{await loadPeerJs()}catch(e){room.status='';room.error=e.message;renderRoom();return}
-  cancelAnimation();closeCard();state=null;page='game';
-  openHostPeer(0);
-}
-function openHostPeer(attempt){
-  const code=makeRoomCode(),peer=new Peer(roomPeerId(code));
-  let opened=false;
-  Object.assign(room,{role:'host',code,peer,closed:false,hostClientId:clientId,status:'正在建立房間…',error:'',offline:false});
-  peer.on('open',()=>{
-    if(room.peer!==peer)return;
-    if(room.offline)notify('房間恢復連線，其他裝置可以再加入了。');
-    opened=true;room.offline=false;room.status='房間已開啟，等待其他裝置加入';render();
-  });
-  peer.on('connection',conn=>{if(room.peer===peer)acceptGuest(conn)});
-  peer.on('disconnected',()=>{if(room.peer===peer&&opened)hostSignalLost()});
-  peer.on('error',err=>{
-    if(room.peer!==peer)return;
-    // Once the code is handed out, losing the matching server only ends in 'disconnected': the room, its code
-    // and the guests already connected stay, and the same code is registered again when the server is back.
-    if(opened)return;
-    if(err.type==='unavailable-id'&&attempt<4){peer.destroy();openHostPeer(attempt+1);return}
-    resetRoom({error:`無法建立房間（${err.type||'未知錯誤'}），請確認網路後再試。`});state=readStored()||null;render();
-  });
+  const path=Array.isArray(roll.path)&&roll.path.length?roll.path:[roll.tileIndex];
+  animation={stage:'rolling',playerId,position:Number.isInteger(from)?from:roll.from,value:roll.value,path,visited:new Set(),roll};
   render();
+  void (async()=>{
+    await pause(1300);
+    if(serial!==animationSerial)return;
+    // 骰子完全停定後才公布點數，避免右下角提示提前暴雷。
+    if(interactive)notify(`擲出 ${animation.value} 點`);
+    animation.stage='moving';render();
+    for(const position of path){
+      if(serial!==animationSerial)return;
+      if(position!==animation.position){animation.position=position;moveTokenStep(position);await pause(MOVE_MS)}
+    }
+    if(serial!==animationSerial)return;
+    await pause(260);
+    if(serial!==animationSerial)return;
+    animation=null;render();
+    if(serial!==animationSerial)return;
+    try{onDone?.()}catch(e){console.error(e)}
+  })();
+  return true;
 }
-function hostSignalLost(){
-  if(!room.offline)notify('房間暫時離線，新的裝置暫時加不進來；恢復後會通知你。');
-  room.offline=true;room.status='房間暫時離線：已加入的裝置可以繼續玩，新的裝置要等恢復連線才能加入。正在自動重新連線…';
-  scheduleSignalRetry();renderRoom();
+function finishLanding(before,interactive=true){
+  if(!state)return null;
+  let roll=null;
+  // 互動流程先只標記矢量鎖定，等 UI 預警 0.5 秒後再真正傳送與結算格子效果。
+  try{roll=resolveLanding(state,{deferVector:true})}catch(e){console.error(e);notify(e.message||'落地效果處理失敗。')}
+  if(!roll)return null;
+  save();render();
+  if(roll.struck&&state.ext?.lastEvent?.type==='ghostStrike'){
+    PartyNet.broadcastEvent({type:'GHOST_ATTACK',target:roll.playerId,enraged:Boolean(state.ext.lastEvent.enraged)});
+  }
+  if(before)animateCashChanges(before);
+  if(interactive&&state.pendingDecision&&!state.ext?.vectorPending)notify('棋子已停穩，請做出二選一決策。');
+  return roll;
 }
-function scheduleSignalRetry(){clearTimeout(room.signalTimer);room.signalTimer=setTimeout(retrySignal,SIGNAL_RETRY_MS)}
-function retrySignal(){
-  clearTimeout(room.signalTimer);room.signalTimer=null;
-  const peer=room.peer;
-  if(peer?.disconnected&&!peer.destroyed)try{peer.reconnect()}catch{}
-}
-function acceptGuest(conn){
-  const guest={conn,clientId:null};
-  room.guests.add(guest);
-  conn.on('data',raw=>onGuestMessage(guest,raw));
-  conn.on('close',()=>{if(room.guests.delete(guest))broadcastRoom()});
-  conn.on('error',()=>{});
-  // PeerJS never emits 'close' for a connection that failed before opening, so drop guests that never said hello.
-  setTimeout(()=>{
-    if(guest.clientId||!room.guests.delete(guest))return;
-    if(!conn.open)notify('有一台裝置想連進房間，但連線沒有成功；對方可以改用手機熱點再試。');
-    try{conn.close()}catch{}
-  },CONNECT_TIMEOUT_MS);
-}
-function onGuestMessage(guest,raw){
-  const msg=parseGuestMessage(raw);if(!msg)return;
-  if(msg.t==='hello'){
-    for(const other of room.guests)if(other!==guest&&other.clientId===msg.clientId){room.guests.delete(other);try{other.conn.close()}catch{}}
-    const returning=Object.values(room.seats).includes(msg.clientId);
-    guest.clientId=msg.clientId;
-    sendSafe(guest.conn,roomSnapshot(true));
-    broadcastRoom();render();notify(returning?'一台裝置重新連上房間。':'有一台裝置加入房間。');
+async function rollWithAnimation(authoritative=false){
+  if(PartyNet.isClient){
+    PartyNet.sendAction({type:'ROLL_DICE',playerId:PartyNet.myPlayerId});
     return;
   }
-  if(!guest.clientId)return;
-  const reject=message=>sendSafe(guest.conn,{t:'reject',message});
-  if(msg.t==='pick'){
-    if(state){reject('遊戲已經開始，不能再選企業。');return}
-    try{room.lobby=pickRole(room.lobby,guest.clientId,msg.roleId,msg.name,ROLES.map(r=>r.id))}catch(e){reject(e.message);return}
-    broadcastRoom();render();return;
+  if(PartyNet.isHost&&state?.net&&!authoritative){
+    const owner=state.net.owners?.[activePlayer()?.id];
+    if(owner!==PartyNet.peerId){notify('現在不是房主的回合，已等待玩家擲骰。');return}
   }
-  if(msg.t==='unpick'){if(!state){room.lobby=leaveLobby(room.lobby,guest.clientId);broadcastRoom();render()}return}
-  if(msg.t==='claim'){
-    if(!state){reject('房主還沒開始對局。');return}
-    syncSeats();
-    try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),msg.playerId,guest.clientId)}catch(e){reject(e.message);return}
-    broadcastRoom();render();return;
-  }
-  if(msg.t==='investment'){
-    room.queue=room.queue.then(async()=>{syncSeats();if(!state||!canAct(room.seats,state,guest.clientId)){reject('還沒輪到你操作。');return;}const actor=Object.keys(room.seats).find(id=>room.seats[id]===guest.clientId);const error=await investmentReceive(actor,msg);if(error)reject(error);}).catch(()=>{});return;
-  }
-  if(msg.t==='auction-bid'){
-    room.queue=room.queue.then(async()=>{const playerId=Object.keys(room.seats).find(id=>room.seats[id]===guest.clientId);if(!playerId){reject('你沒有玩家座位。');return;}const error=await auctionReceive(playerId,msg.amount,msg.auctionId);if(error)reject(error);}).catch(()=>{});return;
-  }
-  // Actions run one at a time and the turn owner is checked when each one runs, so a double-clicked
-  // "交給下一位" cannot end the next player's turn too.
-  room.queue=room.queue.then(async()=>{
-    syncSeats();
-    if(!state||!canAct(room.seats,state,guest.clientId)){reject(missingSeats().length?SEATS_MISSING:'還沒輪到你操作。');return}
-    const error=await applyAction(msg.action,msg.amount,true);
-    if(error)reject(error);
-  }).catch(()=>{});
+  if(animation)return;
+  if(state?.ext?.vectorPending){notify('矢量操作鎖定中，請稍候。');return}
+  if(state?.net&&!PartyNet.canAct(state)&&!authoritative){notify('現在不是你的回合。');return}
+  if(state?.ext?.debug&&!['roll'].includes(state.phase)){state.phase='roll';state.pendingDecision=null;}
+  let result=null,from=null,playerId=null,before=null;
+  try{
+    await withGameLock(()=>{
+      if(!ensureFresh())return;
+      const p=activePlayer();from=p.position;playerId=p.id;before=cashSnapshot();
+      result=rollDie(state,undefined,{defer:true});save();
+    });
+    if(!result)return;
+    SoundManager.play('dice');
+    const started=beginRollAnimation(result,from,playerId,true,()=>finishLanding(before,true));
+    if(!started){notify(`擲出 ${result.value} 點`);finishLanding(before,true);}
+  }catch(e){SoundManager.play('error');notify(e.message||'無法擲骰')}
 }
-function closeRoom(){
-  for(const g of room.guests)sendSafe(g.conn,{t:'closed'});
-  room.closed=true;
-  // Give the "closed" messages a moment to go out, then reload without ?room= to get this device's single game back.
-  setTimeout(()=>{try{room.peer?.destroy()}catch{}const url=new URL(location.href);url.searchParams.delete('room');location.replace(url.href)},300);
+// 命運骰子：消耗特殊道具後，以玩家自選的 1–6 點強制移動。
+async function fateDiceRoll(value,authoritative=false){
+  if(PartyNet.isClient){PartyNet.sendAction({type:'FATE_DICE',value,playerId:PartyNet.myPlayerId});return}
+  if(animation)return;
+  const step=Number(value);
+  if(!Number.isInteger(step)||step<1||step>6){notify('請選擇 1–6 的點數。');return}
+  if(state?.ext?.vectorPending){notify('矢量操作鎖定中，請稍候。');return}
+  if(state?.net&&!PartyNet.canAct(state)&&!authoritative){notify('現在不是你的回合。');return}
+  let result=null,from=null,playerId=null,before=null;
+  try{
+    await withGameLock(()=>{
+      if(!ensureFresh())return;
+      const p=activePlayer();from=p.position;playerId=p.id;before=cashSnapshot();
+      const forced=extUseFateDice(state,step);
+      result=rollDie(state,forced,{defer:true});save();
+    });
+    if(!result)return;
+    SoundManager.play('dice');
+    const started=beginRollAnimation(result,from,playerId,true,()=>finishLanding(before,true));
+    if(!started){notify(`命運骰子強制 ${result.value} 點`);finishLanding(before,true);}
+  }catch(e){SoundManager.play('error');notify(e.message||'命運骰子無法使用')}
 }
 
-async function joinRoom(input){
-  const code=normalizeRoomCode(input);
-  if(!code){room.error='房間代碼是 5 個英文字母或數字。';renderRoom();return}
-  if(room.role)return;
-  room.prefill=code;room.error='';room.status='正在連線…';renderRoom();
-  try{await loadPeerJs()}catch(e){room.status='';room.error=e.message;renderRoom();return}
-  const peer=new Peer();
-  Object.assign(room,{role:'guest',code,peer,closed:false,retries:0,synced:false,status:'正在連線…'});
-  armConnectTimeout();
-  peer.on('open',()=>{if(room.peer===peer)connectToHost()});
-  peer.on('disconnected',()=>{if(room.peer===peer)scheduleSignalRetry()});
-  peer.on('error',err=>{
-    if(room.peer!==peer)return;
-    if(room.synced){if(err.type==='peer-unavailable')scheduleReconnect();return}
-    failJoin(err.type==='peer-unavailable'?ROOM_NOT_FOUND:`無法連線（${err.type||'未知錯誤'}），請確認網路後再試。`);
-  });
-  render();
+function closeModal(){modal=null;$('#party-modal').hidden=true}
+function openTarget(action,itemId=null){
+  if(state?.pendingDecision)return;
+  if(state?.net&&PartyNet.active&&!PartyNet.canAct(state)){notify('現在不是你的回合，請等待其他玩家。');return}
+  modal={kind:'target',action,itemId};renderModal();
 }
-function failJoin(error){resetRoom({error});$('#room-modal').hidden=false;render()}
-function connectToHost(){
-  const conn=room.peer.connect(roomPeerId(room.code),{reliable:true});
-  room.hostConn=conn;
-  armConnectTimeout();
-  conn.on('open',()=>{if(room.hostConn!==conn)return;clearTimeout(room.connectTimer);room.connectTimer=null;room.retries=0;room.status='已連線';conn.send({t:'hello',clientId});renderRoom()});
-  conn.on('data',msg=>{if(room.hostConn===conn)onHostMessage(msg)});
-  conn.on('close',()=>{if(room.hostConn===conn&&isGuest()&&!room.closed)dropHostConn()});
-  // A connection that fails before opening only emits 'error'; one that stalls emits nothing until the timeout.
-  conn.on('error',()=>{if(room.hostConn===conn&&!conn.open&&isGuest()&&!room.closed)dropHostConn()});
+function targetOptions(){
+  const p=activePlayer();
+  if(modal.action==='skill'){
+    return state.players.filter(x=>x.id!==p.id&&!x.ext?.eliminated).map(x=>{const r=role(x.roleId);return {id:x.id,label:x.name,icon:r.icon,desc:`${r.name} · ${x.stars}★ · ${money(x.cash)} 總資產`}});
+  }
+  if(modal.action==='item'){
+    return state.players.filter(x=>x.id!==p.id).map(x=>({id:x.id,label:x.name,icon:role(x.roleId).icon,desc:`第 ${x.position} 格 · ${x.stars}★ · ${money(x.cash)} 總資產`}));
+  }
+  if(modal.action==='acquire'){
+    return state.players.filter(x=>canAcquire(state,p,x)).map(x=>{const cost=p.cash<0&&x.cash<0?0:x.cash<0?ACQUIRE_DISCOUNT_COST:ACQUIRE_COST;return {id:x.id,label:x.name,icon:role(x.roleId).icon,desc:`併購價 ${money(cost)} · 目標總資產 ${money(x.cash)}`}});
+  }
+  return [];
 }
-function armConnectTimeout(){
-  clearTimeout(room.connectTimer);
-  room.connectTimer=setTimeout(()=>{room.connectTimer=null;if(isGuest()&&!room.closed&&!room.hostConn?.open)dropHostConn()},CONNECT_TIMEOUT_MS);
+function renderModal(){
+  const el=$('#party-modal');
+  if(page!=='game'||!state){el.hidden=true;return}
+  if(state.net&&PartyNet.active){
+    const decisionOwner=state.pendingDecision?.playerId;
+    if(!PartyNet.canAct(state)||(decisionOwner&&decisionOwner!==PartyNet.myPlayerId)){
+      modal=null;el.hidden=true;return;
+    }
+  }
+  if(state.pendingDecision&&!animation){
+    if(state.ext?.debug||PartyUI.decisionBlocked?.(state)){modal=null;el.hidden=true;return}
+    const p=state.players.find(x=>x.id===state.pendingDecision.playerId)||activePlayer();
+    el.dataset.locked='true';$('#modal-close').hidden=true;$('#modal-icon').textContent=state.pendingDecision.icon||'🤔';$('#modal-kicker').textContent=`DECISION · 第 ${state.round} 季 · ${p.name}`;$('#modal-title').textContent=state.pendingDecision.title?`快速決策：${state.pendingDecision.title}`:'快速決策：二選一';$('#modal-text').textContent=state.pendingDecision.text||'踩格後的老闆時間。選一個立刻生效，沒有回頭路。';
+    $('#modal-body').innerHTML=`<div class="decision-list">${state.pendingDecision.options.filter(o=>!o.hidden).map(o=>`<button type="button" class="decision-option" data-decision="${o.id}" ${o.available===false?'disabled':''}><span class="decision-icon">${o.icon}</span><div><strong>${h(o.label)}</strong><span>${h(o.desc)}</span></div><em>${o.cash>0?'+':''}${o.cash||0} 總資產 · ${o.energy>0?'+':''}${o.energy||0} 能量</em></button>`).join('')}</div>`;
+    $('#modal-actions').innerHTML='<p class="modal-note">決策完成後才能結束回合。</p>';
+    el.hidden=false;return;
+  }
+  if(modal?.kind==='target'){
+    const p=activePlayer(),options=targetOptions();
+    const titles={skill:`發動技能 · ${role(p.roleId).skill.name}`,item:`使用道具 · ${item(modal.itemId)?.name||''}`,acquire:'惡意併購 · 選擇目標'};
+    const texts={skill:'選擇要干擾的對象。技能消耗 1 點能量。',item:'選擇要交換位置的對手，雙方會立刻觸發落地格效果。',acquire:'選擇一家公司發動併購。目標會成為你的子公司，每回合上繳 40% 收益。'};
+    el.dataset.locked='false';$('#modal-close').hidden=false;$('#modal-icon').textContent=modal.action==='acquire'?'🤝':modal.action==='item'?'🔄':role(p.roleId).skill.icon;$('#modal-kicker').textContent=`TARGET · 第 ${state.round} 季`;$('#modal-title').textContent=titles[modal.action];$('#modal-text').textContent=texts[modal.action];
+    $('#modal-body').innerHTML=`<div class="target-list">${options.length?options.map(o=>`<button type="button" class="target-option" data-target-action="${modal.action}" data-target-id="${h(o.id)}" ${o.sector?`data-target-sector="${h(o.sector)}"`:''} data-item-id="${modal.itemId||''}"><span>${o.icon}</span><div><strong>${h(o.label)}</strong><small>${h(o.desc)}</small></div><i>→</i></button>`).join(''):'<div class="empty-state">目前沒有可選目標。</div>'}</div>`;
+    $('#modal-actions').innerHTML='<button type="button" class="secondary" data-close-modal>取消</button>';
+    el.hidden=false;return;
+  }
+  el.hidden=true;
 }
-// A guest already in the game keeps retrying; one that never got in sees why and is back on the join form.
-function dropHostConn(){
-  clearTimeout(room.connectTimer);room.connectTimer=null;
-  const conn=room.hostConn;room.hostConn=null;try{conn?.close()}catch{}
-  if(room.synced){scheduleReconnect();return}
-  failJoin(room.peer?.open?P2P_FAILED:SIGNAL_FAILED);
+function render(){
+  const onHome=page==='home';
+  if(!state||onHome){try{PartyUI.clearTurnLock?.()}catch{}}
+  $('#round-badge').hidden=onHome||!state;
+  $('#home').hidden=!onHome;
+  $('#home-btn').classList.toggle('active',onHome);
+  if(onHome){$('#setup').hidden=true;$('#game').hidden=true;closeModal();$('#home-play-btn').textContent=state?'返回對局 →':'設定玩家，開始派對 →';$('#home-status').textContent=state?`已有對局 · 第 ${state.round} 季，返回後可繼續遊玩。`:'一台電腦就能開始，大家輪流操作。';return}
+  if(!state){$('#setup').hidden=false;$('#game').hidden=true;closeModal();renderSetup();return}
+  $('#setup').hidden=true;$('#game').hidden=false;
+  $('#round-number').textContent=String(state.round).padStart(2,'0');$('#round-limit').textContent=`／${state.maxRounds} 季`;
+  const finalSeason=state.round>=state.maxRounds;
+  $('#round-badge').classList.toggle('final-season',finalSeason);
+  $('#round-badge').title=finalSeason?'最終季！':'目前季數';
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  document.querySelectorAll('.tab-page').forEach(p=>p.classList.toggle('active',p.id===`tab-${tab}`));
+  renderBoard();renderTurn();renderGoals();renderPlayers();renderLog();renderModal();
+  try{PartyUI.afterRender(state);}catch(e){console.error(e)}
 }
-function scheduleReconnect(){
-  if(room.reconnectTimer||room.closed)return;
-  if(room.retries++>=15){room.status='房主已離線，房間無法使用。';renderRoom();return}
-  room.status='與房主斷線，重新連線中…';renderRoom();
-  room.reconnectTimer=setTimeout(()=>{room.reconnectTimer=null;if(isGuest()&&!room.closed&&room.peer&&!room.peer.destroyed)connectToHost()},3000);
-}
-function onHostMessage(msg){
-  if(!msg||typeof msg!=='object')return;
-  if(msg.t==='reject'){render();notify(String(msg.message||'房主沒有接受這個操作。').slice(0,120));return}
-  if(msg.t==='closed'){room.closed=true;room.status='房主已關閉房間';try{room.hostConn?.close()}catch{}notify('房主已關閉房間，畫面停在最後的狀態。');render();return}
-  if(msg.t!=='state')return;
-  room.seats=msg.seats&&typeof msg.seats==='object'?Object.fromEntries(Object.entries(msg.seats).filter(([,v])=>typeof v==='string')):{};
-  room.online=Array.isArray(msg.online)?msg.online.filter(x=>typeof x==='string'):[];
-  room.hostClientId=typeof msg.hostClientId==='string'?msg.hostClientId:'';
-  room.lobby=Array.isArray(msg.lobby)?msg.lobby.filter(e=>typeof e?.clientId==='string'&&typeof e.roleId==='string').map(e=>({clientId:e.clientId,roleId:e.roleId,name:String(e.name??'').slice(0,16)})):[];
-  if(msg.welcome){room.synced=true;page='game'}
-  if(typeof msg.game!=='string'){cancelAnimation();closeCard();state=null;render();return}
-  let incoming;try{incoming=importGame(msg.game)}catch{return}
-  const before=state&&!msg.welcome?{round:state.round,status:state.status}:null;
-  if(msg.welcome){cancelAnimation();state=null}
-  const hadGame=!!state;
-  if(!adoptShared(incoming)){render();return}
-  $('#save-status').textContent=`房間 ${room.code} 同步中`;
-  // When the host starts, everyone goes to the board; only a device that could still take an empty seat keeps the seat list open.
-  if(!hadGame&&!msg.welcome&&(mySeat()||!missingSeats().length))closeRoomModal();
-  if(before?.status==='playing'&&incoming.status!=='playing')notify('對局結束，請查看勝負結果。');
-  else if(before&&incoming.round>before.round){snapshotSelection='latest';rememberView();notify(`第 ${before.round} 季已結算。`)}
-}
-function sendToHost(message){if(!room.hostConn?.open){notify('尚未連上房主，請稍候。');return}sendSafe(room.hostConn,message)}
-function claimSeatHere(playerId){
-  const player=state?.players.find(p=>p.id===playerId);
-  if(!player||!confirm(`確定要當「${player.name}」嗎？確認後就不能自己換位子${isHost()?'；要換可以先收回自己的座位':'，選錯了請房主收回'}。`))return;
-  if(isGuest()){sendToHost({t:'claim',playerId});return}
-  if(!isHost()||!state)return;
-  syncSeats();
-  try{room.seats=claimSeat(room.seats,state.players.map(p=>p.id),playerId,clientId)}catch(e){notify(e.message);return}
-  broadcastRoom();render();
-}
-function pickHere(roleId){
-  const name=$('#lobby-name')?.value??room.nameDraft;room.nameDraft=name;
-  if(isGuest()){sendToHost({t:'pick',roleId,name});return}
-  if(!isHost()||state)return;
-  try{room.lobby=pickRole(room.lobby,clientId,roleId,name,ROLES.map(r=>r.id))}catch(e){notify(e.message);return}
-  broadcastRoom();render();
-}
-function dropFromLobby(id){if(!isHost()||state)return;room.lobby=leaveLobby(room.lobby,id);broadcastRoom();render()}
-async function startRoomGame(){
-  if(!isHost()||state)return;
-  let players;try{players=lobbyPlayers(room.lobby)}catch(e){notify(e.message);return}
-  const online=onlineClients(),away=room.lobby.filter(e=>!online.includes(e.clientId));
-  if(!room.lobby.some(e=>e.clientId===clientId)&&!confirm('你還沒選企業，開始後你只能觀看。確定要開始嗎？'))return;
-  if(away.length&&!confirm(`${away.map(e=>`「${e.name||role(e.roleId).name}」`).join('、')}目前離線，輪到他時遊戲會停下來等。確定要開始嗎？`))return;
-  try{await withGameLock(()=>{
-    const next=createGame({players,targetWealth:room.lobbyTarget,maxRounds:room.lobbyRounds});
-    prepareNewSession(next);
-    room.seats=lobbySeats(next,room.lobby);room.seatsGameId=syncInfo(next).gameId;
-    state=next;page='game';tab='business';snapshotSelection='preview';rememberView();closeRoomModal();save();render();
-  })}catch(e){notify(e.message)}
-}
-function kickSeat(playerId){if(!isHost())return;room.seats=releaseSeat(room.seats,playerId);broadcastRoom();render()}
-function leaveRoom(){
-  if(isHost()){if(!confirm('關閉房間後，這局多人對局就結束了（不會存檔），其他裝置也會停止同步。要關閉嗎？'))return;closeRoom();notify('房間已關閉，回到單機模式。');return}
-  if(!isGuest())return;
-  // Reloading without ?room= brings back this device's own single game, which multiplayer never touches.
-  room.closed=true;try{room.peer?.destroy()}catch{}
-  const url=new URL(location.href);url.searchParams.delete('room');location.replace(url.href);
-}
-function roomLink(){const url=new URL(location.href);url.search='';url.hash='';url.searchParams.set('room',room.code);return url.href}
-async function copyText(text,done){try{await navigator.clipboard.writeText(text);notify(done)}catch{notify(`無法自動複製，請手動記下：${text}`)}}
-function seatListMarkup(){
-  const host=roomHostId(),online=onlineClients(),seated=!!mySeat();
-  return `<ul class="room-seats">${state.players.map(p=>{
-    const owner=room.seats[p.id],mine=owner===clientId;
-    const who=mine?'你':!owner?'空位':owner===host?'房主':online.includes(owner)?'另一台裝置':'離線中的裝置';
-    // Seats are locked once taken: only the host can free one; a seated device sees no other seat to take.
-    const button=owner&&isHost()?`<button type="button" class="quiet" data-room="kick" data-player="${h(p.id)}">收回</button>`:mine?'<span class="room-seat-locked">已鎖定</span>':!owner&&!seated?`<button type="button" class="secondary" data-room="claim" data-player="${h(p.id)}">坐這裡</button>`:'';
-    return `<li class="room-seat ${mine?'mine':''}"><span class="room-seat-dot" style="background:${colors[p.color]}"></span><div><strong>${h(p.name)}</strong><small>${h(role(p.roleId).name)} · ${who}</small></div>${button}</li>`;
-  }).join('')}</ul>`;
-}
-// Lobby before the game: everyone types a name and picks a company; the host starts once at least two have picked.
-function lobbyMarkup(){
-  const mine=room.lobby.find(e=>e.clientId===clientId),taken=new Map(room.lobby.map(e=>[e.roleId,e])),online=onlineClients(),host=roomHostId();
-  const roles=ROLES.map(r=>{
-    const owner=taken.get(r.id),me=owner?.clientId===clientId;
-    return `<button type="button" class="lobby-role ${me?'mine':''}" data-room="pick" data-role="${h(r.id)}" ${owner&&!me?'disabled':''}><span aria-hidden="true">${r.icon}</span><strong>${h(r.name)}</strong><small>${owner?(me?'你選的':h(owner.name||'已被選走')):h(r.sector)}</small></button>`;
-  }).join('');
-  const who=e=>e.clientId===clientId?' · 你':e.clientId===host?' · 房主':online.includes(e.clientId)?'':' · 離線';
-  const list=room.lobby.length?`<ol class="lobby-list">${room.lobby.map(e=>`<li><strong>${h(e.name||'（還沒填名字）')}</strong><small>${h(role(e.roleId).name)}${who(e)}</small>${isHost()&&e.clientId!==clientId?`<button type="button" class="quiet" data-room="drop" data-client="${h(e.clientId)}">移除</button>`:''}</li>`).join('')}</ol>`:'<p class="room-note">還沒有人選企業。</p>';
-  const end=isHost()
-    ?`<div class="lobby-options"><label>勝利淨資產<input id="lobby-target" type="number" min="2000" step="500" value="${h(room.lobbyTarget)}"></label><label>最多季數<input id="lobby-rounds" type="number" min="2" max="50" value="${h(room.lobbyRounds)}"></label></div><button type="button" class="primary" data-room="start" ${room.lobby.length<2?'disabled':''}>開始遊戲（${room.lobby.length} 位玩家）</button><p class="room-note">${room.lobby.length<2?'至少要 2 位選好企業才能開始。':'隨時可以開始；沒選企業的裝置開始後只能觀看。'}</p>`
-    :`<p class="room-note">${mine?'選好了，等房主開始遊戲。開始前還可以換。':'選好企業後等房主開始遊戲；不選的話開始後只能觀看。'}</p>${mine?'<button type="button" class="quiet" data-room="unpick">不玩了，只觀看</button>':''}`;
-  return `<h3>1. 你的名字</h3><input id="lobby-name" class="lobby-name" maxlength="16" autocomplete="off" placeholder="例如 小明" aria-label="你的名字" value="${h(room.nameDraft||mine?.name||'')}"><h3>2. 選一家企業</h3><p class="room-note">別人選走的會變灰；開始前可以隨時換。</p><div class="lobby-roles">${roles}</div><h3>已選好 ${room.lobby.length} 位 · 房間裡 ${online.length} 台裝置</h3>${list}${end}`;
-}
-// Tells a host whose game has more players than devices why play is waiting and how to fix the count.
-function seatCountHint(){
-  if(state.status!=='playing'||!missingSeats().length)return '';
-  const devices=onlineClients().length,players=state.players.length;
-  return `<p class="room-wait-note">目前 ${devices} 台裝置、${players} 位玩家；每位玩家都要有人坐才能開始。${devices<players?'如果人數設多了，可以按上方「新遊戲」重新設定，大家再重選座位。':''}</p>`;
-}
-function roomBodyMarkup(){
-  const status=room.status?`<p class="room-status${room.offline?' offline':''}" role="status">${h(room.status)}</p>`:'';
-  const error=room.error?`<p class="form-error" role="alert">${h(room.error)}</p>`:'';
-  if(isHost())return `<p class="eyebrow">房主 · HOST</p><h2 id="room-title">房間代碼</h2><div class="room-code">${h(room.code)}</div>${status}<div class="room-share"><button type="button" class="secondary" data-room="copy-code">複製代碼</button><button type="button" class="secondary" data-room="copy-link">複製邀請連結</button></div><section class="room-section">${state?`<h3>座位</h3><p class="room-note">開始時每台裝置已經對應到自己選的企業，不能自己換。有人離開時可以按「收回」，讓另一台裝置接手。</p>${seatCountHint()}${seatListMarkup()}`:lobbyMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">關閉房間</button>`;
-  if(isGuest())return `<p class="eyebrow">訪客 · GUEST</p><h2 id="room-title">房間 ${h(room.code)}</h2>${status}<section class="room-section">${state?`<h3>座位</h3><p class="room-note">你對應的是開始前自己選的企業，不能自己換。開始後才加入的人只能觀看；有空出來的座位時可以按「坐這裡」接手。</p>${seatListMarkup()}`:lobbyMarkup()}</section><button type="button" class="quiet room-leave" data-room="leave">離開房間</button>`;
-  const typed=$('#room-code-input')?.value??room.prefill??'';
-  const fileWarning=location.protocol==='file:'?'<p class="form-error">目前是直接開啟檔案。其他裝置需要用網址（例如 GitHub Pages）開啟同一個遊戲才能加入。</p>':'';
-  return `<p class="eyebrow">MULTIPLAYER</p><h2 id="room-title">多人連線</h2><p class="room-lead">每個人用自己的手機或電腦玩：一台建立房間，其他人輸入代碼加入，進房後各自選企業。這台裝置的單機對局會保留，離開房間後就回來。</p>${fileWarning}<section class="room-section"><h3>建立房間</h3><p class="room-note">這台裝置會當主機並保存對局，遊戲期間請保持這個頁面開著。</p><button type="button" class="primary" data-room="create">建立房間</button></section><section class="room-section"><h3>加入房間</h3><div class="room-join"><input id="room-code-input" maxlength="7" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="例如 K7P2Q" aria-label="房間代碼" value="${h(typed)}"><button type="button" class="secondary" data-room="join">加入</button></div><p class="room-note">加入後會顯示房主的對局；離開房間就回到這台裝置原本的對局。</p></section>${error}${status}`;
-}
-function renderRoom(){
-  promptSeat();
-  const chip=$('#room-chip'),mine=room.role&&state?mySeat():null;
-  chip.hidden=!room.role;
-  const picked=room.lobby.find(e=>e.clientId===clientId);
-  if(room.role)chip.textContent=`房間 ${room.code} · ${isHost()?(room.offline?'暫時離線':`${onlineClients().length} 台裝置`):room.status!=='已連線'?room.status:state?(mine?`你：${mine.name}`:missingSeats().length?'還沒選座位':'觀看中'):picked?`已選：${role(picked.roleId).name}`:'還沒選企業'}`;
-  $('#room-btn').classList.toggle('active',!!room.role);
-  document.body.classList.toggle('room-guest',isGuest());
-  document.body.classList.toggle('in-room',!!room.role);
-  if($('#room-modal').hidden)return;
-  // Lobby updates arrive while people type their names, so keep the focused field and cursor across re-renders.
-  const active=document.activeElement,keep=active?.id&&$('#room-body').contains(active)?{id:active.id,start:active.selectionStart,end:active.selectionEnd}:null;
-  $('#room-body').innerHTML=roomBodyMarkup();
-  const el=keep&&document.getElementById(keep.id);
-  if(el){el.focus();try{el.setSelectionRange(keep.start,keep.end)}catch{}}
-}
-// Anyone without a seat is shown the seat list once per game, even if they closed the room dialog before the host started.
-function promptSeat(){
-  if(!room.role||state?.status!=='playing'||isGuest()&&!room.synced)return;
-  const gameId=syncInfo(state).gameId;
-  if(room.seatPromptFor===gameId)return;
-  room.seatPromptFor=gameId;
-  if(!mySeat()&&missingSeats().length)$('#room-modal').hidden=false;
-}
-function openRoomModal(){$('#room-modal').hidden=false;renderRoom();$('#room-code-input')?.focus()}
-function closeRoomModal(){$('#room-modal').hidden=true}
 
-$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;setupPlayers.push({name:`玩家 ${number}`,roleId:ROLES.find(x=>!used.has(x.id)).id});renderSetup()}});
+$('#add-player').addEventListener('click',()=>{if(setupPlayers.length<8){const used=new Set(setupPlayers.map(x=>x.roleId));let number=1;while(setupPlayers.some(x=>x.name===`玩家 ${number}`))number++;const free=PARTY_ROLES.find(x=>!used.has(x.id));setupPlayers.push({name:`玩家 ${number}`,roleId:free?free.id:'random'});renderSetup()}});
 $('#setup-players').addEventListener('input',e=>{if(e.target.dataset.setupName!==undefined)setupPlayers[Number(e.target.dataset.setupName)].name=e.target.value});
 $('#setup-players').addEventListener('change',e=>{if(e.target.dataset.setupRole!==undefined)setupPlayers[Number(e.target.dataset.setupRole)].roleId=e.target.value});
 $('#setup-players').addEventListener('click',e=>{const i=e.target.dataset.removePlayer;if(i!==undefined&&setupPlayers.length>2){setupPlayers.splice(Number(i),1);renderSetup()}});
-$('#start-btn').addEventListener('click',async()=>{if(room.role)return;try{await withGameLock(()=>{const saved=readStored();if(saved){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}const next=createGame({players:setupPlayers,targetWealth:$('#target-input').value,maxRounds:$('#rounds-input').value});prepareNewSession(next);state=next;page='game';$('#setup-error').textContent='';tab='business';snapshotSelection='preview';rememberView();save();render()})}catch(e){$('#setup-error').textContent=e.message}});
-$('.tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;rememberView();render();window.scrollTo({top:0,behavior:'smooth'})});
-$('#snapshot-select').addEventListener('change',e=>{snapshotSelection=e.target.value;rememberView();renderDashboard()});
+async function startGameFromConfig(config){
+  const seed=Number(config.seed)||Date.now();
+  const resolved=extResolveRoles(config.players,seed);
+  const startingCash=Number.isFinite(Number(config.startingCash))&&Number(config.startingCash)>=0?Math.round(Number(config.startingCash)):2000;
+  const next=createGame({players:resolved,maxRounds:config.rounds||10,seed,startingCash});
+  if(config.net)next.net=config.net;
+  extInitGame(next,{mode:config.mode||'star',debug:Boolean(config.debug),target:config.target,rounds:config.rounds,starGoal:config.starGoal,doomEvery:config.doomEvery,doomPrice:config.doomPrice,doomStep:config.doomStep,startingCash});
+  prepareNewSession(next);
+  state=next;page='game';tab='board';rememberView();
+  mapPick=null;document.body.classList.remove('map-pick-mode');
+  $('#setup-error').textContent='';
+  save();render();
+  try{PartyUI.onGameStart(state,{fromLobby:Boolean(config.net)});}catch(e){console.error(e)}
+  return next;
+}
+window.__partyStartGame=startGameFromConfig;
+$('#start-btn').addEventListener('click',async()=>{
+  try{
+    await withGameLock(()=>{
+      const saved=readStored();
+      if(saved&&PartyNet.active){/* 房間對局由房主統一開始，不採用本機舊存檔 */}
+      else if(saved&&state){adoptShared(saved);notify('已加入另一個頁籤的對局。');return}
+      else if(saved&&!confirm('偵測到本機舊存檔。按「確定」延續舊對局，按「取消」建立全新對局。')){adoptShared(saved);notify('已載入本機存檔。');return}
+      const mode=document.querySelector('#mode-select')?.value||setupMode||'star';
+      const debug=Boolean(document.querySelector('#debug-mode')?.checked);
+      const config={players:setupPlayers.map(p=>({...p})),mode,debug,
+        rounds:Number($('#rounds-input')?.value)||10,
+        target:Number($('#target-input')?.value)||0,
+        starGoal:Number($('#star-goal-input')?.value)||3,
+        doomEvery:Number($('#doom-every-input')?.value)||5,
+        doomPrice:Number($('#doom-price-input')?.value)||1000,
+        doomStep:Number($('#doom-step-input')?.value)||500,
+        startingCash:Number($('#starting-cash-input')?.value)};
+      void startGameFromConfig(config);
+    });
+  }catch(e){$('#setup-error').textContent=e.message;SoundManager.play('error')}
+});
 $('#game').addEventListener('click',e=>{
-  const a=e.target.closest('[data-action]');if(!a||!state)return;
-  const action=a.dataset.action;
-  if(auctionState(state).active){notify('請先完成上方商機競標。');return;}
-  if(action==='new-game'){void resetGame();return}
-  if(action==='dismiss-card'){if(animation)return;dismissedCardKey=currentCard()?.key||null;renderBoard();renderTurn();investmentRender();return}
-  if(!iCanAct()){notify(missingSeats().length?SEATS_MISSING:'還沒輪到你，請等待目前的玩家操作。');return}
-  const amount=AMOUNT_INPUTS[action]?Number($(AMOUNT_INPUTS[action])?.value):undefined;
-  if(isGuest()){
-    if(animation)return;
-    if(state.phase==='draw'&&action!=='draw-card'&&action!=='roll')return;
-    if(action!=='roll'&&action!=='draw-card'&&currentCard())return;
-    sendToHost({t:'action',action,amount});return;
+  if(e.target.closest('[data-dismiss-investment]')){dismissInvestmentSettlement();return}
+  if(state?.net&&PartyNet.active&&!PartyNet.canAct(state)&&!e.target.closest('[data-action="new-game"],[data-action="open-settlement"]')){
+    notify('現在不是你的回合，請等待其他玩家。');return;
   }
-  void applyAction(action,amount);
+  const normalItem=e.target.closest('[data-item-id]');
+  if(mapPick){
+    const mapTile=e.target.closest('#board [data-tile-index]');
+    if(mapTile){
+      const index=Number(mapTile.dataset.tileIndex);
+      const callback=mapPick.callback;
+      mapPick=null;
+      document.body.classList.remove('map-pick-mode');
+      if(callback)callback(index);
+      return;
+    }
+  }
+  if(normalItem&&state&&!animation){
+    const id=normalItem.dataset.itemId;
+    if(id==='swap')openTarget('item',id);else runAction({type:'USE_ITEM',itemId:id},()=>{useItem(state,id);SoundManager.play('coin');notify('道具已使用。')});
+    return;
+  }
+  const specialBtn=e.target.closest('[data-special-id]');
+  if(specialBtn&&state&&!animation){
+    const id=specialBtn.dataset.specialId;
+    if(id==='fateDice'){PartyUI.openFateDice();}
+    return;
+  }
+  const mythicBtn=e.target.closest('[data-mythic-id]');
+  if(mythicBtn&&state&&!animation){
+    const id=mythicBtn.dataset.mythicId;
+    if(id==='vector'){beginMapPick('矢量操作：請直接點擊地圖上要設置的格子（Esc 取消）。',index=>runAction({type:'USE_MYTHIC',id,payload:{tileIndex:index}},()=>{extUseMythic(state,'vector',{tileIndex:index});SoundManager.play('whoosh');notify('矢量操作已鎖定目標格。')}));}
+    else if(id==='truthGate'){PartyUI.openTruthGate();}
+    else runAction({type:'USE_MYTHIC',id},()=>{extUseMythic(state,id);if(id!=='iceMushroom')SoundManager.play('whoosh');notify('神話道具已發動！')});
+    return;
+  }
+  const discard=e.target.closest('[data-discard-index]');
+  if(discard&&state&&!animation){
+    const kind=discard.dataset.discardKind,index=Number(discard.dataset.discardIndex);
+    const p=activePlayer();
+    const entry=kind==='mythic'?p.mythics?.[index]:null;
+    const name=kind==='mythic'?(MYTHIC_BY_ID[entry?.id]?.name||'神話道具'):kind==='special'?(SPECIAL_ITEM_BY_ID[p.specials?.[index]]?.name||'特殊道具'):(item(p.items[index])?.name||'道具');
+    if(confirm(`確定丟棄「${name}」？`))runAction({type:'DISCARD',kind,index},()=>{extDiscard(state,p,kind,index);notify('已丟棄道具。')});
+    return;
+  }
+  const a=e.target.closest('[data-action]');if(!a||!state)return;
+  const action=a.dataset.action,p=activePlayer();
+  if(action==='new-game'){
+    if(PartyNet.active){const ratio=PartyNet.confirmResult(PartyNet.myPlayerId);if(ratio)PartyUI.updateConfirm?.(ratio);else notify('已送出再玩一局確認，等待其他玩家。');return}
+    void resetGame();return;
+  }
+  if(action==='open-settlement'){PartyUI.openSettlement(state);return}
+  if(action==='roll'){void rollWithAnimation();return}
+  if(animation)return;
+  if(action==='buy-star'){runAction({type:'BUY_STAR'},()=>{const stars=extBuyStar(state);SoundManager.play('star');notify(`買到第 ${stars} 顆星！`)});return}
+  if(action==='forced-buy-star'){
+    const info=extForcedStarInfo(state);
+    if(info&&confirm(`支付 ${money(info.cost)} 強制買走對方 1 顆星？`))runAction({type:'FORCE_BUY_STAR',targetId:info.targetId},()=>{extForcedBuyStar(state,info.targetId);SoundManager.play('star');notify('強買星星成功！')});
+    return;
+  }
+  if(action==='skill'){
+    const skill=role(p.roleId).skill;
+    if(skill.target==='tile'){
+      PartyUI.openTilePicker({title:`${skill.name} · 選擇格子`,text:'出發格除外，選擇要放置罷工幽靈的位置。',excludeStart:true},index=>runAction({type:'USE_SKILL',tileIndex:index},()=>{extUseSkill(state,null,index);notify('幽靈已派單！')}));
+    }else if(skill.target==='none')runAction({type:'USE_SKILL'},()=>{extUseSkill(state);notify(`${skill.name} 已發動！`)});
+    else openTarget('skill');
+    return;
+  }
+  if(action==='acquire'){openTarget('acquire');return}
+  if(action==='rebel'){runAction({type:'REBEL'},()=>{rebel(state);notify('獨立反撲成功，你已脫離母公司！')});return}
+  if(action==='end-turn'){
+    runAction({type:'END_TURN'},()=>{
+      const result=endTurn(state);
+      if(result){notify(result.finished?'對局結束，正在播放結算動畫…':result.suddenDeath?'第一名平手，驟死賽啟動！':`第 ${result.round} 季已結算。`);if(!result.finished)SoundManager.play('slide');}
+    });
+    return;
+  }
+  if(action==='debug-end-turn'){
+    runAction({type:'DEBUG_END_TURN'},()=>{
+      const result=extDebugEndTurn(state);
+      if(result){notify(result.finished?'對局結束，正在播放結算動畫…':result.suddenDeath?'第一名平手，驟死賽啟動！':`測試模式：已切換到第 ${state.round} 季。`);if(!result.finished)SoundManager.play('slide');}
+      else notify('測試模式：已結束目前回合。');
+    });
+    return;
+  }
 });
-document.querySelectorAll('[data-close-modal]').forEach(x=>x.addEventListener('click',closeCard));
-twoColumnPlayerCards.addEventListener('change',()=>{if(state&&page==='game'&&tab==='business')renderPlayers()});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeCard();closeRoomModal()}});
-$('#room-btn').addEventListener('click',openRoomModal);
-$('#room-chip').addEventListener('click',openRoomModal);
-$('#room-modal').addEventListener('click',e=>{
-  if(e.target.closest('[data-close-room]')){closeRoomModal();return}
-  const b=e.target.closest('[data-room]');if(!b)return;
-  const what=b.dataset.room;
-  if(what==='create')void createRoom();
-  else if(what==='join')void joinRoom($('#room-code-input')?.value);
-  else if(what==='copy-code')void copyText(room.code,'已複製房間代碼。');
-  else if(what==='copy-link')void copyText(roomLink(),'已複製邀請連結。');
-  else if(what==='claim')claimSeatHere(b.dataset.player);
-  else if(what==='kick')kickSeat(b.dataset.player);
-  else if(what==='pick')pickHere(b.dataset.role);
-  else if(what==='unpick'){if(isGuest())sendToHost({t:'unpick'})}
-  else if(what==='drop')dropFromLobby(b.dataset.client);
-  else if(what==='start')void startRoomGame();
-  else if(what==='leave')leaveRoom();
+$('#party-modal').addEventListener('click',e=>{
+  const decision=e.target.closest('[data-decision]');
+  if(decision){runAction({type:'DECISION',optionId:decision.dataset.decision},()=>{chooseDecision(state,decision.dataset.decision);modal=null;notify('決策已生效。')});return}
+  const target=e.target.closest('[data-target-action]');
+  if(target){
+    const action=target.dataset.targetAction,targetId=target.dataset.targetId,sector=target.dataset.targetSector,itemId=modal?.itemId;
+    modal=null;renderModal();
+    runAction({type:'TARGET_ACTION',action,targetId,sector,itemId},()=>{
+      if(action==='skill'){extUseSkill(state,targetId||undefined,sector||undefined);notify('企業技能已發動！')}
+      else if(action==='item'){useItem(state,itemId,targetId);notify('移形換位完成，雙方已觸發落地效果！')}
+      else if(action==='acquire'){const result=acquireTarget(state,targetId);notify(`併購完成，支付 ${money(result.cost)} 總資產。`)}
+    });
+    return;
+  }
+  if(e.target.closest('[data-close-modal]')){
+    if(state?.pendingDecision&&!animation){notify('請先完成二選一決策。');return}
+    closeModal();renderModal();
+  }
 });
-$('#room-modal').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='room-code-input')void joinRoom(e.target.value);else if(e.key==='Enter'&&e.target.id==='lobby-name')e.target.blur()});
-$('#room-modal').addEventListener('input',e=>{const id=e.target.id;if(id==='lobby-name')room.nameDraft=e.target.value;else if(id==='lobby-target')room.lobbyTarget=e.target.value;else if(id==='lobby-rounds')room.lobbyRounds=e.target.value});
-// A renamed player who already picked a company sends the pick again so the lobby shows the new name.
-$('#room-modal').addEventListener('change',e=>{if(e.target.id!=='lobby-name')return;const mine=room.lobby.find(x=>x.clientId===clientId);if(mine&&mine.name!==e.target.value.trim())pickHere(mine.roleId)});
-$('#room-wait-open').addEventListener('click',openRoomModal);
-window.addEventListener('pagehide',()=>{if(isHost())for(const g of room.guests)sendSafe(g.conn,{t:'closed'})});
-// A phone that unlocks or gets its network back reconnects to the matching server right away instead of waiting for the next retry.
-window.addEventListener('online',retrySignal);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)retrySignal()});
+$('.tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;tab=b.dataset.tab;rememberView();render();window.scrollTo({top:0,behavior:'smooth'})});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(cancelMapPick())return;if(!state?.pendingDecision)closeModal()}});
 async function resetGame(){
-  if(isGuest()){notify('只有房主可以開始新遊戲。');return}
-  if(isHost()){
-    if(state&&!confirm('確定開始新遊戲？房間裡的裝置都會回到選企業的畫面，上一局的選擇會保留。'))return;
-    cancelAnimation();closeCard();state=null;page='game';tab='business';rememberView();broadcastRoom();render();openRoomModal();return;
+  if(PartyNet.active){
+    if(!confirm('要離開目前房間並開始新遊戲嗎？'))return;
+    PartyNet.leave();
+    PartyUI.hideLobby?.();
   }
   if(state&&!confirm('確定開始新遊戲？所有已開啟的頁籤都會返回設定畫面，建議先匯出備份。'))return;
-  await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;clearSave();cancelAnimation();closeCard();state=null;page='game';tab='business';rememberView();render()});
+  await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;clearSave();cancelAnimation();closeModal();state=null;page='game';tab='board';rememberView();render()});
 }
-$('#home-btn').addEventListener('click',()=>{page='home';closeCard();render();window.scrollTo({top:0,behavior:'smooth'})});
+function returnToLobby(lobby){
+  cancelAnimation();closeModal();state=null;page='game';tab='board';rememberView();
+  try{localStorage.removeItem(storageKey)}catch{}
+  render();
+  PartyUI.showLobby?.(lobby||PartyNet.lobby);
+}
+$('#home-btn').addEventListener('click',()=>{page='home';closeModal();render();window.scrollTo({top:0,behavior:'smooth'})});
 $('#home-play-btn').addEventListener('click',()=>{page='game';render();window.scrollTo({top:0,behavior:'smooth'})});
-$('#home-room-btn').addEventListener('click',openRoomModal);
 $('#new-game-btn').addEventListener('click',()=>{void resetGame()});
 $('#open-tab-btn').addEventListener('click',()=>{window.open(location.href,'_blank','noopener')});
-$('#export-btn').addEventListener('click',()=>{if(!state){notify('目前沒有可匯出的對局。');return}const blob=new Blob([exportGame(state)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`經濟棋局-第${state.round}季.json`;a.click();URL.revokeObjectURL(url)});
-$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;if(room.role){notify('多人連線中不能匯入存檔；請先離開房間。');e.target.value='';return}try{const imported=importGame(await file.text());await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='business';snapshotSelection='latest';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
+$('#export-btn').addEventListener('click',()=>{if(!state){notify('目前沒有可匯出的對局。');return}const blob=new Blob([exportGame(state)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`經濟棋局-派對-第${state.round}季.json`;a.click();URL.revokeObjectURL(url)});
+$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;if(PartyNet.isClient){notify('多人房間由房主管理狀態，客機不能匯入存檔。');e.target.value='';return}try{const imported=extEnsureState(importGame(await file.text()));await withGameLock(()=>{const stored=readStored();if(stored&&isNewerGame(stored,state))state=stored;prepareNewSession(imported);cancelAnimation();state=imported;page='game';tab='board';rememberView();save();render()});notify('存檔已載入，其他頁籤也已更新。')}catch(err){notify(err.message||'無法讀取存檔')}e.target.value=''});
 window.addEventListener('storage',e=>{
-  if(e.key!==storageKey||room.role)return;
+  if(PartyNet.active)return;
+  if(e.key!==storageKey)return;
   if(e.newValue){try{adoptShared(importGame(e.newValue))}catch{}}
-  else{const saved=readStored();if(saved)adoptShared(saved);else if(saved===null){resetAt=Math.max(resetAt,Date.now());cancelAnimation();closeCard();state=null;render()}}
+  else{const saved=readStored();if(saved)adoptShared(saved);else if(saved===null){resetAt=Math.max(resetAt,Date.now());cancelAnimation();closeModal();state=null;render()}}
 });
 if(channel)channel.onmessage=e=>{
-  const message=e.data;if(!message||message.writerId===tabId||room.role)return;
+  if(PartyNet.active)return;
+  const message=e.data;if(!message||message.writerId===tabId)return;
   if(message.type==='state'){try{adoptShared(importGame(JSON.stringify(message.game)))}catch{}}
-  if(message.type==='reset'&&(!state||message.updatedAt>=syncInfo(state).updatedAt)){resetAt=Math.max(resetAt,message.updatedAt);cancelAnimation();closeCard();state=null;render()}
+  if(message.type==='reset'&&(!state||message.updatedAt>=syncInfo(state).updatedAt)){resetAt=Math.max(resetAt,message.updatedAt);cancelAnimation();closeModal();state=null;render()}
 };
-function syncOnFocus(){if(room.role)return;const saved=readStored();if(saved)adoptShared(saved);else if(saved===null&&state){cancelAnimation();closeCard();state=null;render()}}
+function syncOnFocus(){if(PartyNet.active)return;const saved=readStored();if(saved)adoptShared(saved);else if(saved===null&&state){cancelAnimation();closeModal();state=null;render()}}
 window.addEventListener('focus',syncOnFocus);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncOnFocus()});
-const savedAtStart=readStored();if(savedAtStart){state=savedAtStart;snapshotSelection='latest'}
-const invitedRoom=normalizeRoomCode(new URLSearchParams(location.search).get('room'));
-if(invitedRoom){room.prefill=invitedRoom;$('#room-modal').hidden=false}
-renderHomeRoles();
-render();
-
-// Local opportunity prototype. Bid amounts stay here, never inside the broadcast game state.
-function auctionSecrets(){
- const active=state&&auctionState(state).active;if(!active)return {};
- if(auctionPrivate.id!==active.id){
-  auctionPrivate={id:active.id,bids:{}};
-  if(!isGuest()&&active.submittedIds.length){active.submittedIds=[];notify('競標已恢復，請大家重新出價。');}
- }
- return auctionPrivate.bids;
-}
-async function auctionReceive(playerId,amount,id){
- return run(()=>{if(!state)throw Error('對局尚未開始。');const secret=auctionSecrets();if(auctionSubmit(state,secret,playerId,amount,id)){auctionResolve(state,secret);auctionPrivate={id:null,bids:{}};}});
-}
-function auctionEffectText(item){return item.kind==='saving'?`每季省 ${item.amount} × ${item.duration} 季`:`每季收入 +${item.amount} × ${item.duration} 季`;}
-function auctionPanel(){
- let el=$('#opportunity-panel');if(el)return el;
- el=document.createElement('section');el.id='opportunity-panel';$('#game').prepend(el);
- el.addEventListener('click',async event=>{
-  const b=event.target.closest('[data-auction]');if(!b)return;
-  const action=b.dataset.auction;
-  if(action==='skip'){
-   if(!isHost()||!confirm('尚未出價的玩家將全部視為放棄，確定揭標？'))return;
-   await run(()=>{const active=auctionState(state).active;if(!active)return;const secret=auctionSecrets();for(const id of active.eligibleIds.filter(id=>!active.submittedIds.includes(id)))auctionSubmit(state,secret,id,0,active.id);auctionResolve(state,secret);auctionPrivate={id:null,bids:{}};});return;
+// ---- 多人房間整合 ---------------------------------------------------------
+PartyNet.onLobby = lobby => {
+  try{
+    PartyUI.showLobby?.(lobby);
+    if(lobby?.confirmRatio)PartyUI.updateConfirm?.(lobby.confirmRatio);
+    else if(lobby&&!lobby.confirms?.length)PartyUI.updateConfirm?.({confirmed:0,total:lobby.players?.length||0});
+  }catch(e){console.error(e)}
+};
+PartyNet.onStart = config => {
+  if(PartyNet.isHost)void startGameFromConfig(config);
+  else $('#save-status').textContent='房主正在初始化棋盤…';
+};
+PartyNet.onState = (game,fromPeer) => {
+  try{
+    const incoming=extEnsureState(importGame(game));
+    const sameRoom=state?.net?.roomCode===PartyNet.code&&state?.net?.hostId===PartyNet.hostId;
+    if(incoming.net?.roomCode===PartyNet.code&&incoming.net?.hostId===PartyNet.hostId&&(!sameRoom||isNewerGame(incoming,state))){
+      const moving=incoming.status==='playing'&&incoming.phase==='moving'&&incoming.lastRoll?.value>0;
+      const from=moving?incoming.lastRoll.from:null;
+      const before=cashSnapshot();
+      const starting=incoming.status==='playing'&&(!sameRoom||state?.status!=='playing');
+      cancelAnimation();
+      if(starting){page='game';tab='board';rememberView();PartyUI.hideLobby?.()}
+      state=incoming;render();
+      if(starting&&!PartyNet.isHost)PartyUI.onGameStart?.(state,{fromLobby:true});
+      if(before)animateCashChanges(before);
+      if(moving)beginRollAnimation(incoming.lastRoll,from,incoming.lastRoll.playerId,false);
+      $('#save-status').textContent='房間狀態已同步';
+    }
+  }catch(e){console.warn('room state rejected',e)}
+};
+PartyNet.onAction = (action,fromPeer) => {
+  if(!PartyNet.isHost||!state?.net||!action?.type||animation)return;
+  const pendingOwners={
+    DECISION:state.pendingDecision?.playerId,
+    STAR_OFFER:state.ext?.starOffer?.playerId,
+    CLEAR_EVENT_PROMPT:state.ext?.eventPrompt?.playerId,
+    REPLACE_ITEM:state.ext?.replaceOffer?.playerId,
+    AUCTION_ACTION:window.__partyEngine?.extAuctionCurrent?.(state)?.id,
+    INVEST:state.ext?.investOffer?.playerId,
+    TAX:state.ext?.taxChoice?.playerId,
+    INSIDER:state.ext?.insiderOffer?.playerId
+  };
+  const actorId=pendingOwners[action.type]||activePlayer()?.id;
+  if(action.playerId!==actorId||state.net.owners?.[actorId]!==fromPeer)return;
+  if(state.ext?.vectorPending&&action.type!=='CLEAR_EVENT_PROMPT')return;
+  const execute=(fn,options={})=>{void run(fn,{...options,authoritative:true})};
+  switch(action.type){
+    case 'ROLL_DICE':
+      if(state.phase==='roll')void rollWithAnimation(true);
+      return;
+    case 'FATE_DICE':
+      void fateDiceRoll(action.value,true);return;
+    case 'USE_ITEM':
+      execute(()=>useItem(state,action.itemId,action.targetId));return;
+    case 'USE_MYTHIC':
+      execute(()=>extUseMythic(state,action.id,action.payload));return;
+    case 'DISCARD':
+      execute(()=>extDiscard(state,activePlayer(),action.kind,action.index));return;
+    case 'BUY_STAR':
+      execute(()=>extBuyStar(state));return;
+    case 'FORCE_BUY_STAR':
+      execute(()=>extForcedBuyStar(state,action.targetId));return;
+    case 'USE_SKILL':
+      execute(()=>extUseSkill(state,action.targetId||undefined,action.tileIndex),{afterCommit:()=>dispatchSkillCue(actorId)});return;
+    case 'TARGET_ACTION':
+      execute(()=>{
+        if(action.action==='skill')extUseSkill(state,action.targetId||undefined,action.sector||undefined);
+        else if(action.action==='item')useItem(state,action.itemId,action.targetId);
+        else if(action.action==='acquire')acquireTarget(state,action.targetId);
+      },{afterCommit:action.action==='skill'?()=>dispatchSkillCue(actorId):undefined});return;
+    case 'REBEL':
+      execute(()=>rebel(state));return;
+    case 'END_TURN':
+      execute(()=>endTurn(state));return;
+    case 'DEBUG_END_TURN':
+      execute(()=>extDebugEndTurn(state));return;
+    case 'DECISION':
+      execute(()=>chooseDecision(state,action.optionId));return;
+    case 'CLEAR_EVENT_PROMPT':
+      execute(()=>window.__partyEngine?.extClearEventPrompt?.(state));return;
+    case 'STAR_OFFER':
+      execute(()=>action.buy?extBuyStar(state):extSkipStarOffer(state));return;
+    case 'REPLACE_ITEM':
+      execute(()=>extResolveReplace(state,action.dropNew?{dropNew:true}:{kind:action.kind,index:action.index}));return;
+    case 'AUCTION_ACTION':
+      execute(()=>extAuctionAction(state,action.action),{allowAuction:true});return;
+    case 'INVEST':
+      execute(()=>extInvest(state,Boolean(action.yes)));return;
+    case 'TAX':
+      execute(()=>action.action==='pay'?extTaxPay(state):extTaxDetain(state));return;
+    case 'INSIDER':
+      execute(()=>action.yes?extInsiderPay(state):state.ext.insiderOffer=null);return;
+    case 'TRUTH_GATE':
+      execute(()=>extUseMythic(state,'truthGate',action.payload));return;
+    case 'DEBUG_GIVE':
+      execute(()=>extDebugGive(state,action.kind,action.id));return;
+    case 'DEBUG_TELEPORT':
+      execute(()=>extDebugTeleport(state,action.targetId,action.tileIndex));return;
+    case 'DEBUG_GHOST':
+      execute(()=>extDebugGhostTo(state,action.tileIndex));return;
   }
-  const active=state&&auctionState(state).active;if(!active)return;
-  const p=room.role?mySeat():state.players.find(p=>active.eligibleIds.includes(p.id)&&!active.submittedIds.includes(p.id));
-  if(!p)return;
-  const input=el.querySelector('#auction-amount');const amount=action==='pass'?0:Number(input?.value);
-  if(!Number.isSafeInteger(amount)||amount<0||amount>0&&amount>state.companies[p.roleId].cash){notify('請輸入現金範圍內的整數金額。');return;}
-  if(isGuest()){sendToHost({t:'auction-bid',auctionId:active.id,amount});b.disabled=true;return;}
-  const error=await auctionReceive(p.id,amount,active.id);if(error)notify(error);
- });return el;
-}
-function auctionRender(){
- const el=auctionPanel();el.hidden=!state||page!=='game';if(!state)return;
- if(!isGuest())auctionSecrets();
- const mod=auctionState(state),a=mod.active,r=mod.lastResult;
- const oldInput=el.querySelector('#auction-amount');const draft=oldInput?.value,focused=document.activeElement===oldInput;
- if(a){
-  const mine=room.role?mySeat():state.players.find(p=>a.eligibleIds.includes(p.id)&&!a.submittedIds.includes(p.id));
-  const eligible=mine&&a.eligibleIds.includes(mine.id),done=mine&&a.submittedIds.includes(mine.id);
-  const canBid=eligible&&!done&&!room.closed;
-  el.innerHTML=`<div class="op-head"><span>市場商機 · ${a.submittedIds.length} / ${a.eligibleIds.length} 人已完成</span><span class="op-pill">同步競標</span></div><div class="op-content"><div class="op-icon">${a.item.icon}</div><div><h2>${h(a.item.title)}</h2><p class="op-story">${h(a.item.story)}</p><div class="op-reward">得標後：${auctionEffectText(a.item)}</div><p class="op-small">最高價者付錢拿合約，其他人不扣錢。</p></div></div><div class="op-bottom">${canBid?`<div><strong>${h(mine.name)}，你願意花多少？</strong><span class="op-small"> 現金 ${money(state.companies[mine.roleId].cash)}</span><div class="op-actions"><input id="auction-amount" aria-label="你的競標金額" type="number" min="0" max="${Math.max(0,Math.floor(state.companies[mine.roleId].cash))}" step="1" value="${Math.max(0,Math.min(100,Math.floor(state.companies[mine.roleId].cash)))}"><button class="primary" data-auction="bid">出價</button><button class="secondary" data-auction="pass">放棄</button></div></div>`:`<strong>${done?'✓ 已送出，等待其他玩家':mine?'本次商機不適用你的企業':'你正在觀看競標'}</strong>`}<div class="op-players">${a.eligibleIds.map(id=>`<span>${h(state.players.find(p=>p.id===id)?.name)} ${a.submittedIds.includes(id)?'✓':'…'}</span>`).join('')}</div>${isHost()?'<details><summary>有人沒回應？</summary><button class="quiet" data-auction="skip">將未回應玩家視為放棄並揭標</button></details>':''}</div>`;
-  if(canBid&&draft!==undefined&&el.dataset.viewer===mine.id&&el.dataset.auction===a.id){el.querySelector('#auction-amount').value=draft;if(focused)el.querySelector('#auction-amount').focus();}
-  el.dataset.viewer=mine?.id||'';el.dataset.auction=a.id;
- }else{
-  const winner=r&&state.players.find(p=>p.id===r.winnerId),next=state.round%2===0?state.round:state.round+1;
-  el.innerHTML=r?`<div class="op-result"><span class="op-icon">${r.item.icon}</span><div><strong>${winner?`${h(winner.name)} 以 ${money(r.price)} 得標！`:'本次無人出價'}</strong><p class="op-small">${h(r.item.title)}${winner?` · ${auctionEffectText(r.item)}`:''}${r.tie?' · 同價抽籤':''}</p></div><details><summary>看出價</summary>${r.bids.map(b=>`<p>${h(state.players.find(p=>p.id===b.playerId)?.name)}：${b.amount?money(b.amount):'放棄'}</p>`).join('')}</details></div>`:`<div class="op-preview"><span>🏷️ 下次市場商機：第 ${next} 季結算後</span><span class="op-small">適合兩家以上企業才開標</span></div>`;
- }
-}
+};
+PartyNet.onEvent = event => {
+  if(event?.type==='GHOST_ATTACK')PartyUI.playGhostInterference?.(event);
+  if(event?.type==='SKILL_TRIGGERED')PartyUI.playSkillCue?.(event);
+};
+PartyNet.onReturnLobby = lobby => { PartyUI.hideSettlement?.();returnToLobby(lobby); };
+PartyNet.onStatus = text => { const el=$('#save-status');if(el)el.textContent=text; };
+PartyNet.onError = text => notify(text);
 
-async function investmentReceive(actor,msg){
- return run(()=>{if(msg.action==='buy')investmentBuy(state,actor,msg.targetRole,msg.turn);else if(msg.action==='sell')investmentSell(state,actor,msg.cardId,msg.turn);else throw Error('未知的投資操作。');});
+window.PartyApp={
+  get state(){return state},
+  get page(){return page},
+  get tab(){return tab},
+  get animation(){return animation},
+  isAnimating:()=>Boolean(animation),
+  isMapPicking:()=>Boolean(mapPick),
+  cancelMapPick,
+  run, runAction, render, notify, save, startGameFromConfig, returnToLobby, resetGame, dismissInvestmentSettlement, visibleInvestmentSettlement,
+  activePlayer, openTarget, closeModal, PartyNet, SoundManager, resolveLanding,
+  cashSnapshot, animateCashChanges,
+  buyStar:()=>runAction({type:'BUY_STAR'},()=>extBuyStar(state)),
+  useMythic:(id,payload)=>runAction({type:'USE_MYTHIC',id,payload},()=>extUseMythic(state,id,payload)),
+  discard:(kind,index)=>runAction({type:'DISCARD',kind,index},()=>extDiscard(state,activePlayer(),kind,index)),
+  debugGive:(kind,id)=>runAction({type:'DEBUG_GIVE',kind,id},()=>{const result=extDebugGive(state,kind,id);notify(result?.pendingReplace?'道具欄已滿，請選擇替換或丟棄。':'已獲得道具。')}),
+  debugTeleport:(pid,tile)=>runAction({type:'DEBUG_TELEPORT',targetId:pid,tileIndex:tile},()=>{extDebugTeleport(state,pid,tile);notify('已傳送玩家。')}),
+  debugGhostTo:(tile)=>runAction({type:'DEBUG_GHOST',tileIndex:tile},()=>{extDebugGhostTo(state,tile);notify('已移動幽靈。')}),
+  debugEndTurn:()=>runAction({type:'DEBUG_END_TURN'},()=>{
+    const result=extDebugEndTurn(state);
+    if(result)notify(result.finished?'對局結束，正在播放結算動畫…':result.suddenDeath?'第一名平手，驟死賽啟動！':`第 ${result.round} 季已結算。`);
+    else notify('測試模式：已結束目前回合。');
+  }),
+  spinWheel:()=>PartyUI.openWheel(),
+  fateDiceRoll,
+  openSettlement:()=>PartyUI.openSettlement(state)
+};
+
+const savedAtStart=readStored();
+if(savedAtStart){
+  state=savedAtStart;extEnsureState(state);
+  if(state.status==='playing'&&state.phase==='moving'){
+    // 重新載入或從背景返回時，避免停在「移動中」而卡住整場對局。
+    const roll=resolveLanding(state);
+    if(!roll){state.phase='resolve';state.pendingLanding=null}
+    save();
+  }
 }
-function investmentPanel(){
- let el=$('#investment-panel');if(el)return el;
- el=document.createElement('section');el.id='investment-panel';$('#opportunity-panel').after(el);
- el.addEventListener('click',async event=>{
-  const b=event.target.closest('[data-investment]');if(!b||!state)return;
-  const action=b.dataset.investment;
-  const mine=room.role?mySeat():currentPlayer();if(!mine||room.role&&!iCanAct()){notify('請等自己的回合交易。');return;}
-  const msg={t:'investment',action,turn:investmentTurn(state)};
-  if(action==='buy')msg.targetRole=b.dataset.target;
-  else if(action==='sell')msg.cardId=Number(b.dataset.card);
-  if(isGuest()){sendToHost(msg);b.disabled=true;return;}
-  const error=await investmentReceive(mine.id,msg);if(error)notify(error);
- });return el;
-}
-function investmentRender(){
- const el=investmentPanel();el.hidden=!state||page!=='game';if(!state)return;
- const mine=room.role?mySeat():currentPlayer(),cards=mine?investmentCards(state,mine.id):[],mod=investmentState(state);
- const canTrade=mine&&state.status==='playing'&&state.phase==='manage'&&!auctionState(state).active&&!animation&&(!room.role||iCanAct())&&!currentCard();
- const isTile=mine&&investmentTiles.includes(mine.position),already=mod.boughtTurns.includes(investmentTurn(state));
- const canBuy=canTrade&&isTile&&!already&&cards.length<2&&state.companies[mine.roleId].cash>=200;
- const icon=id=>ROLES.find(r=>r.id===id)?.icon||'🏢',name=id=>ROLES.find(r=>r.id===id)?.name||id;
- const targets=mine?state.players.filter(p=>p.id!==mine.id):[];
- let content=cards.length?`<div class="iv-grid">${cards.map(c=>{const diff=c.value-c.cost,change=mod.lastChanges.find(x=>x.id===c.id);return `<article class="iv-card"><div class="iv-row"><span class="iv-icon">${icon(c.targetRole)}</span><span class="${diff<0?'iv-loss':'iv-profit'}">${diff>0?`賺 +${diff}`:diff<0?`虧 ${diff}`:'賺賠 0'}</span></div><strong>${h(name(c.targetRole))}</strong><span class="iv-value">${money(c.value)}</span>${change?`<small>${h(change.eventName)}：${change.from} → ${change.to}</small>`:''}${canTrade?`<button class="secondary" data-investment="sell" data-card="${c.id}">賣出 +${money(c.value)}</button>`:''}</article>`;}).join('')}</div>`:'<p class="iv-note">停在棋盤的「投資＋事件」格，就能買入其他企業。</p>';
- if(canBuy)content+=`<h3>選一家投資</h3><div class="iv-grid">${targets.map(p=>`<article class="iv-card"><span class="iv-icon">${icon(p.roleId)}</span><strong>${h(name(p.roleId))}</strong><small>${h(p.name)}</small><button class="primary" data-investment="buy" data-target="${h(p.roleId)}">投資 −200</button></article>`).join('')}</div>`;
- else if(canTrade&&isTile)content+=`<p class="iv-note">${already?'本回合已投資 ✓':cards.length>=2?'已持有兩張，先賣出一張才能再買。':'現金不足 200。'}</p>`;
- const who=mine?`${h(mine.name)}的投資`:'企業投資';
- el.innerHTML=`<div class="iv-head"><strong>📈 ${who} ${cards.length} / 2</strong>${cards.length?`<span>價值 ${money(cards.reduce((n,c)=>n+c.value,0))}</span>`:''}<details><summary aria-label="投資規則">？</summary><p>200 買一張，每回合最多買一張、最多持有兩張。新事件依被投資企業的影響調整 ±50 或 ±100，卡片價值介於 0～400。自己的經營回合可賣出，價值計入淨資產。事件只調價一次。</p></details></div><div class="iv-body">${content}</div>`;
-}
+renderHomeRoles();renderRules();render();PartyUI.init?.();
